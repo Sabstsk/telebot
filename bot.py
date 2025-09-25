@@ -20,6 +20,7 @@ import os
 import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from flask import Flask, request, jsonify
 
 # Load environment variables from .env file
 load_dotenv()
@@ -30,6 +31,8 @@ CHAT_ID = os.getenv("CHAT_ID")      # Load chat ID from environment variable
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "CRAZYPANEL1")  # Admin username
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7490634345"))  # Admin user ID
 API_KEY = os.getenv("API_KEY")  # Load from environment variable only
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Webhook URL for production
+PORT = int(os.getenv("PORT", 5000))  # Port for Flask app
 if not API_KEY:
     raise ValueError("API_KEY environment variable is required. Please check your .env file.")
 API_ENDPOINT_TEMPLATE = "https://ishanxstudio.space/kunal/number.php?number={number}&key=" + API_KEY
@@ -187,6 +190,7 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required. Please check your .env file.")
 
 bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
 
 # simple number validator: allow optional +, digits, 10-15 digits total
 NUMBER_RE = re.compile(r'^\+?\d{10,15}$')
@@ -1569,18 +1573,95 @@ Choose an option below or send a valid mobile number! 👇
         """
         bot.send_message(message.chat.id, suggestion_text, reply_markup=create_main_keyboard(), parse_mode='Markdown')
 
+# Flask routes for webhook
+@app.route('/', methods=['GET'])
+def index():
+    """Health check endpoint for Render.com"""
+    return jsonify({
+        "status": "online",
+        "bot_name": "Mobile Number Lookup Bot",
+        "admin": f"@{ADMIN_USERNAME}",
+        "message": "Bot is running successfully! 🤖"
+    })
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle incoming webhook requests from Telegram"""
+    try:
+        json_str = request.get_data().decode('UTF-8')
+        update = telebot.types.Update.de_json(json_str)
+        bot.process_new_updates([update])
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Additional health check endpoint"""
+    uptime = datetime.now() - bot_stats["start_time"]
+    return jsonify({
+        "status": "healthy",
+        "uptime": str(uptime).split('.')[0],
+        "total_searches": bot_stats['total_searches'],
+        "active_users": len(search_history),
+        "timestamp": datetime.now().isoformat()
+    })
+
+@app.route('/set_webhook', methods=['GET'])
+def set_webhook():
+    """Set webhook URL (for manual setup if needed)"""
+    if WEBHOOK_URL:
+        try:
+            webhook_url = f"{WEBHOOK_URL}/webhook"
+            bot.remove_webhook()
+            bot.set_webhook(url=webhook_url)
+            return jsonify({
+                "status": "success",
+                "message": f"Webhook set to {webhook_url}"
+            })
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": str(e)
+            }), 500
+    else:
+        return jsonify({
+            "status": "error",
+            "message": "WEBHOOK_URL environment variable not set"
+        }), 400
+
+def setup_webhook():
+    """Setup webhook on startup"""
+    if WEBHOOK_URL:
+        try:
+            webhook_url = f"{WEBHOOK_URL}/webhook"
+            bot.remove_webhook()
+            bot.set_webhook(url=webhook_url)
+            print(f"✅ Webhook set to: {webhook_url}")
+        except Exception as e:
+            print(f"❌ Failed to set webhook: {e}")
+    else:
+        print("⚠️ WEBHOOK_URL not set, running in polling mode for development")
+
 if __name__ == "__main__":
     print("🤖 Mobile Number Lookup Bot Starting...")
     print(f"👑 Admin: @{ADMIN_USERNAME}")
     print("📱 Bot is ready! Send /start to begin.")
-    print("Press Ctrl+C to stop.")
     
-    # Use polling with error handling for production
-    try:
-        bot.infinity_polling(none_stop=True, interval=0, timeout=20)
-    except Exception as e:
-        print(f"Bot stopped with error: {e}")
-        # Restart the bot
-        import time
-        time.sleep(5)
-        bot.infinity_polling(none_stop=True, interval=0, timeout=20)
+    # Setup webhook if URL is provided, otherwise use polling for development
+    if WEBHOOK_URL:
+        print("🌐 Running in webhook mode for production...")
+        setup_webhook()
+        app.run(host='0.0.0.0', port=PORT, debug=False)
+    else:
+        print("🔄 Running in polling mode for development...")
+        print("Press Ctrl+C to stop.")
+        try:
+            bot.infinity_polling(none_stop=True, interval=0, timeout=20)
+        except Exception as e:
+            print(f"Bot stopped with error: {e}")
+            # Restart the bot
+            import time
+            time.sleep(5)
+            bot.infinity_polling(none_stop=True, interval=0, timeout=20)
