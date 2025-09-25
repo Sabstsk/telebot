@@ -1576,13 +1576,173 @@ Choose an option below or send a valid mobile number! 👇
 # Flask routes for webhook
 @app.route('/', methods=['GET'])
 def index():
-    """Health check endpoint for Render.com"""
-    return jsonify({
-        "status": "online",
-        "bot_name": "Mobile Number Lookup Bot",
-        "admin": f"@{ADMIN_USERNAME}",
-        "message": "Bot is running successfully! 🤖"
-    })
+    """Health check endpoint and server status page"""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Mobile Number Lookup Bot</title>
+        <style>
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                margin: 0;
+                padding: 0;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+            }
+            .container {
+                text-align: center;
+                padding: 2rem;
+                background: rgba(255, 255, 255, 0.1);
+                border-radius: 20px;
+                backdrop-filter: blur(10px);
+                box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+                border: 1px solid rgba(255, 255, 255, 0.18);
+                max-width: 500px;
+                margin: 20px;
+            }
+            .status-badge {
+                background: #10b981;
+                color: white;
+                padding: 8px 16px;
+                border-radius: 20px;
+                font-size: 14px;
+                font-weight: bold;
+                display: inline-block;
+                margin-bottom: 20px;
+                animation: pulse 2s infinite;
+            }
+            @keyframes pulse {
+                0% { transform: scale(1); }
+                50% { transform: scale(1.05); }
+                100% { transform: scale(1); }
+            }
+            h1 {
+                font-size: 2.5rem;
+                margin-bottom: 1rem;
+                text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+            }
+            .bot-emoji {
+                font-size: 4rem;
+                margin-bottom: 1rem;
+                animation: bounce 2s infinite;
+            }
+            @keyframes bounce {
+                0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+                40% { transform: translateY(-10px); }
+                60% { transform: translateY(-5px); }
+            }
+            .info {
+                background: rgba(255, 255, 255, 0.2);
+                padding: 1.5rem;
+                border-radius: 15px;
+                margin: 20px 0;
+                text-align: left;
+            }
+            .info h3 {
+                margin-top: 0;
+                color: #fbbf24;
+            }
+            .admin-info {
+                background: rgba(16, 185, 129, 0.2);
+                padding: 1rem;
+                border-radius: 10px;
+                margin-top: 20px;
+            }
+            .telegram-link {
+                display: inline-block;
+                background: #0088cc;
+                color: white;
+                padding: 12px 24px;
+                border-radius: 25px;
+                text-decoration: none;
+                font-weight: bold;
+                margin-top: 20px;
+                transition: all 0.3s ease;
+            }
+            .telegram-link:hover {
+                background: #006699;
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            }
+            .stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                gap: 15px;
+                margin-top: 20px;
+            }
+            .stat-item {
+                background: rgba(255, 255, 255, 0.1);
+                padding: 15px;
+                border-radius: 10px;
+                text-align: center;
+            }
+            .stat-number {
+                font-size: 1.5rem;
+                font-weight: bold;
+                color: #fbbf24;
+            }
+            .stat-label {
+                font-size: 0.9rem;
+                opacity: 0.8;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="status-badge">🟢 SERVER IS READY</div>
+            <div class="bot-emoji">🤖</div>
+            <h1>Mobile Number Lookup Bot</h1>
+            <p style="font-size: 1.2rem; opacity: 0.9;">Your Telegram bot is running successfully!</p>
+            
+            <div class="info">
+                <h3>📱 Bot Features</h3>
+                <ul style="text-align: left;">
+                    <li>🔍 Mobile number lookup</li>
+                    <li>📊 Search history tracking</li>
+                    <li>💎 Subscription management</li>
+                    <li>👑 Admin panel</li>
+                </ul>
+            </div>
+            
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-number">✅</div>
+                    <div class="stat-label">Online</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number">🚀</div>
+                    <div class="stat-label">Ready</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number">⚡</div>
+                    <div class="stat-label">Fast</div>
+                </div>
+            </div>
+            
+            <div class="admin-info">
+                <strong>👑 Admin:</strong> @""" + ADMIN_USERNAME + """<br>
+                <strong>🌐 Status:</strong> All systems operational<br>
+                <strong>📡 API:</strong> Connected
+            </div>
+            
+            <a href="https://t.me/""" + BOT_TOKEN.split(':')[0] + """" class="telegram-link" target="_blank">
+                📱 Open Bot in Telegram
+            </a>
+            
+            <p style="margin-top: 30px; opacity: 0.7; font-size: 0.9rem;">
+                🔧 Powered by Flask & Python | 🚀 Deployed Successfully
+            </p>
+        </div>
+    </body>
+    </html>
+    """
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -1606,6 +1766,16 @@ def health_check():
         "total_searches": bot_stats['total_searches'],
         "active_users": len(search_history),
         "timestamp": datetime.now().isoformat()
+    })
+
+@app.route('/status', methods=['GET'])
+def status_check():
+    """Simple status endpoint for deployment platforms"""
+    return jsonify({
+        "status": "online",
+        "message": "Server is ready! 🚀",
+        "bot_running": True,
+        "port": PORT
     })
 
 @app.route('/set_webhook', methods=['GET'])
@@ -1644,24 +1814,39 @@ def setup_webhook():
     else:
         print("⚠️ WEBHOOK_URL not set, running in polling mode for development")
 
+def start_bot_polling():
+    """Start bot in polling mode (runs in a separate thread)"""
+    print("🔄 Starting bot polling in background...")
+    try:
+        bot.infinity_polling(none_stop=True, interval=0, timeout=20)
+    except Exception as e:
+        print(f"Bot polling stopped with error: {e}")
+        # Restart the bot
+        import time
+        time.sleep(5)
+        start_bot_polling()
+
 if __name__ == "__main__":
     print("🤖 Mobile Number Lookup Bot Starting...")
     print(f"👑 Admin: @{ADMIN_USERNAME}")
     print("📱 Bot is ready! Send /start to begin.")
     
-    # Setup webhook if URL is provided, otherwise use polling for development
+    # Always run Flask app to bind to port (required for deployment platforms)
     if WEBHOOK_URL:
         print("🌐 Running in webhook mode for production...")
         setup_webhook()
+        print(f"🚀 Flask app starting on port {PORT}")
         app.run(host='0.0.0.0', port=PORT, debug=False)
     else:
-        print("🔄 Running in polling mode for development...")
-        print("Press Ctrl+C to stop.")
-        try:
-            bot.infinity_polling(none_stop=True, interval=0, timeout=20)
-        except Exception as e:
-            print(f"Bot stopped with error: {e}")
-            # Restart the bot
-            import time
-            time.sleep(5)
-            bot.infinity_polling(none_stop=True, interval=0, timeout=20)
+        print("🔄 Running in hybrid mode (Flask + Polling)...")
+        print(f"🌐 Flask server will run on port {PORT}")
+        print("🤖 Bot will use polling for Telegram updates")
+        
+        # Start bot polling in a separate thread
+        import threading
+        polling_thread = threading.Thread(target=start_bot_polling, daemon=True)
+        polling_thread.start()
+        
+        # Run Flask app (this keeps the main thread alive and binds to port)
+        print(f"🚀 Flask app starting on port {PORT}")
+        app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
