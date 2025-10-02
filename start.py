@@ -20,8 +20,12 @@ def main():
     port = os.environ.get('PORT', '10000')
     print(f"📡 Port: {port}")
     
-    # Check required environment variables
-    required_vars = ['BOT_TOKEN', 'API_KEY', 'WEBHOOK_URL']
+    # Set RENDER environment variable to indicate we're on Render
+    os.environ['RENDER'] = 'true'
+    
+    # Check required environment variables - WEBHOOK_URL is optional for Render
+    required_vars = ['BOT_TOKEN', 'API_KEY']
+    optional_vars = ['WEBHOOK_URL']
     missing_vars = []
     
     for var in required_vars:
@@ -30,18 +34,24 @@ def main():
         else:
             if var == 'BOT_TOKEN':
                 print(f"✅ {var}: SET (***{os.environ[var][-4:]})")
-            elif var == 'WEBHOOK_URL':
-                print(f"✅ {var}: {os.environ[var]}")
             else:
                 print(f"✅ {var}: SET")
     
+    # Check optional variables
+    for var in optional_vars:
+        if os.environ.get(var):
+            print(f"✅ {var}: {os.environ[var]}")
+        else:
+            print(f"⚠️ {var}: NOT SET (will auto-generate)")
+    
     if missing_vars:
-        print(f"❌ Missing environment variables: {', '.join(missing_vars)}")
+        print(f"❌ Missing required environment variables: {', '.join(missing_vars)}")
         print("Please set these in your Render dashboard")
         sys.exit(1)
     
     print("=" * 50)
     print("🔄 Starting bot application...")
+    print("🚀 Flask will bind to port immediately!")
     
     # Import and run the main bot
     try:

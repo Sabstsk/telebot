@@ -1886,6 +1886,11 @@ def ready():
     """Immediate readiness check for deployment platforms"""
     return f"READY ON PORT {config.PORT}", 200
 
+@app.route('/port', methods=['GET'])
+def port_check():
+    """Port binding confirmation for Render"""
+    return f"Port {config.PORT} is open and ready!", 200
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Handle incoming webhook requests from Telegram"""
@@ -2218,10 +2223,18 @@ def main():
         # Print port binding message IMMEDIATELY
         print(f"🚀 Binding to port {config.PORT}...")
         
-        # Detect environment
-        is_production = bool(config.WEBHOOK_URL and config.WEBHOOK_URL.strip())
+        # Detect environment - Check for Render environment
+        is_production = bool(config.WEBHOOK_URL and config.WEBHOOK_URL.strip()) or bool(os.environ.get('RENDER'))
         env_name = "PRODUCTION (Render)" if is_production else "DEVELOPMENT (Local)"
         print(f"🌐 Environment: {env_name}")
+        
+        # Force production mode if on Render
+        if os.environ.get('RENDER') and not config.WEBHOOK_URL:
+            # Auto-generate webhook URL for Render
+            render_service = os.environ.get('RENDER_SERVICE_NAME', 'telegram-bot')
+            config.WEBHOOK_URL = f"https://{render_service}.onrender.com"
+            is_production = True
+            print(f"🔧 Auto-detected Render, setting webhook: {config.WEBHOOK_URL}")
         
         if is_production:
             print(f"🔗 Webhook URL: {config.WEBHOOK_URL}")
@@ -2229,52 +2242,44 @@ def main():
         else:
             print(f"📱 Test interface: http://localhost:{config.PORT}/")
         
-        # Initialize components immediately for production
+        # Configure Flask for production FIRST
+        app.config['JSON_SORT_KEYS'] = False
+        app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+        
+        # Initialize components in background to avoid blocking port binding
         global bot_manager, subscription_manager
         
-        try:
-            logger.info("🔄 Initializing core components...")
-            
-            # Initialize subscription manager first
-            subscription_manager = SubscriptionManager()
-            logger.info(f"📊 Loaded {len(subscription_manager.users)} subscriptions")
-            
-            # Initialize bot manager
-            bot_manager = BotManager()
-            logger.info("🤖 Mobile Number Lookup Bot v2.1 Ready!")
-            logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
-            
-        except Exception as e:
-            logger.error(f"❌ Component initialization failed: {e}")
-            logger.exception("Initialization error:")
-        
-        # Setup bot mode based on environment
-        def setup_bot_mode():
+        def initialize_components():
+            global bot_manager, subscription_manager
             try:
+                logger.info("🔄 Initializing core components...")
+                
+                # Initialize subscription manager first
+                subscription_manager = SubscriptionManager()
+                logger.info(f"📊 Loaded {len(subscription_manager.users)} subscriptions")
+                
+                # Initialize bot manager
+                bot_manager = BotManager()
+                logger.info("🤖 Mobile Number Lookup Bot v2.1 Ready!")
+                logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
+                
+                # Setup bot mode based on environment
                 if is_production:
                     logger.info("🌐 Setting up production webhook mode...")
                     setup_webhook_for_render()
                 else:
                     logger.info("🖥️ Setting up local polling mode...")
                     setup_local_polling()
+                    
             except Exception as e:
-                logger.error(f"❌ Bot mode setup failed: {e}")
-                logger.exception("Bot setup error:")
+                logger.error(f"❌ Component initialization failed: {e}")
+                logger.exception("Initialization error:")
         
-        # Start bot setup in background for production, immediate for local
-        if is_production:
-            # For production, setup after Flask starts
-            setup_thread = threading.Thread(target=setup_bot_mode, daemon=True)
-            setup_thread.start()
-        else:
-            # For local, setup immediately
-            setup_bot_mode()
+        # Start initialization in background thread
+        init_thread = threading.Thread(target=initialize_components, daemon=True)
+        init_thread.start()
         
-        # Configure Flask for production
-        app.config['JSON_SORT_KEYS'] = False
-        app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
-        
-        # Start Flask app
+        # Start Flask app IMMEDIATELY to bind to port
         print(f"🌐 Flask server starting on 0.0.0.0:{config.PORT}")
         print(f"🔍 Health: {config.WEBHOOK_URL or f'http://localhost:{config.PORT}'}/health")
         print(f"🐛 Debug: {config.WEBHOOK_URL or f'http://localhost:{config.PORT}'}/debug")
@@ -2402,9 +2407,25 @@ if __name__ == "__main__":
     print(f"  Port: {config.PORT}")
     print(f"  Host: 0.0.0.0")
     print(f"  Status: BINDING TO PORT NOW...")
+    print(f"  Port check: http://0.0.0.0:{config.PORT}/port")
     if config.WEBHOOK_URL:
         print(f"  Production URL: {config.WEBHOOK_URL}")
     else:
         print(f"  Local URL: http://localhost:{config.PORT}/")
     print("=" * 50)
-    main()
+    
+    # Start Flask immediately
+    try:
+        main()
+    except Exception as e:
+        print(f"  Startup failed: {e}")
+        # Emergency port binding
+        from flask import Flask
+        emergency_app = Flask(__name__)
+        
+        @emergency_app.route('/')
+        def emergency():
+            return f"Emergency server on port {config.PORT}", 200
+            
+        print(f"  Starting emergency server on port {config.PORT}")
+        emergency_app.run(host='0.0.0.0', port=config.PORT, debug=False)
