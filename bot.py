@@ -1896,21 +1896,31 @@ def webhook():
     """Handle incoming webhook requests from Telegram"""
     try:
         # Log webhook received for debugging
-        logger.debug("📨 Webhook request received")
+        logger.info("📨 Webhook request received from Telegram")
         
         json_str = request.get_data().decode('UTF-8')
         if not json_str:
             logger.warning("⚠️ Empty webhook data received")
             return jsonify({"status": "error", "message": "Empty data"}), 400
         
+        logger.info(f"📨 Webhook data: {json_str[:200]}...")  # Log first 200 chars
+        
         # Parse and process update
         update = telebot.types.Update.de_json(json_str)
         if update:
-            logger.debug(f"🔄 Processing update: {update.update_id}")
-            bot.process_new_updates([update])
-            return jsonify({"status": "ok", "update_id": update.update_id})
+            logger.info(f"🔄 Processing update ID: {update.update_id}")
+            
+            # Process the update with the bot
+            try:
+                bot.process_new_updates([update])
+                logger.info(f"✅ Successfully processed update {update.update_id}")
+                return jsonify({"status": "ok", "update_id": update.update_id})
+            except Exception as process_error:
+                logger.error(f"❌ Error processing update: {process_error}")
+                logger.exception("Update processing error:")
+                return jsonify({"status": "error", "message": f"Processing failed: {str(process_error)}"}), 500
         else:
-            logger.warning("⚠️ Invalid update data")
+            logger.warning("⚠️ Invalid update data - could not parse JSON")
             return jsonify({"status": "error", "message": "Invalid update"}), 400
             
     except Exception as e:
@@ -2059,14 +2069,17 @@ def test_webhook():
     try:
         data = request.get_json() or {}
         headers = dict(request.headers)
+        raw_data = request.get_data().decode('UTF-8')
         
         logger.info(f"🧪 Test webhook received data: {data}")
         logger.info(f"🧪 Test webhook headers: {headers}")
+        logger.info(f"🧪 Raw data: {raw_data[:500]}...")
         
         return jsonify({
             "status": "success",
             "message": "Test webhook received data",
             "data_received": data,
+            "raw_data": raw_data[:200] if raw_data else None,
             "headers_received": headers,
             "timestamp": datetime.now().isoformat()
         })
@@ -2076,6 +2089,41 @@ def test_webhook():
             "status": "error",
             "message": str(e),
             "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/test_bot', methods=['GET'])
+def test_bot():
+    """Test bot functionality manually"""
+    try:
+        # Test bot connection
+        bot_info = bot.get_me()
+        
+        # Try to send a test message to admin
+        try:
+            test_message = "🧪 Bot test from Render deployment"
+            bot.send_message(config.ADMIN_USER_ID, test_message)
+            admin_message_sent = True
+        except Exception as e:
+            admin_message_sent = False
+            logger.warning(f"Could not send test message to admin: {e}")
+        
+        return jsonify({
+            "status": "success",
+            "bot_info": {
+                "username": bot_info.username,
+                "first_name": bot_info.first_name,
+                "id": bot_info.id
+            },
+            "admin_message_sent": admin_message_sent,
+            "webhook_url": f"{config.WEBHOOK_URL or 'https://telebot-1-2tl0.onrender.com'}/webhook",
+            "message": "Bot is functional and ready to receive messages"
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Bot test failed: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
         }), 500
 
 @app.route('/set_webhook', methods=['GET'])
@@ -2230,6 +2278,38 @@ def force_webhook():
             "message": str(e)
         }), 500
 
+@app.route('/webhook_status', methods=['GET'])
+def webhook_status():
+    """Check webhook status and recent activity"""
+    try:
+        webhook_info = bot.get_webhook_info()
+        
+        return jsonify({
+            "webhook_active": bool(webhook_info.url),
+            "webhook_url": webhook_info.url,
+            "pending_updates": webhook_info.pending_update_count,
+            "last_error": webhook_info.last_error_message,
+            "last_error_date": str(webhook_info.last_error_date) if webhook_info.last_error_date else None,
+            "max_connections": webhook_info.max_connections,
+            "allowed_updates": webhook_info.allowed_updates,
+            "has_custom_certificate": webhook_info.has_custom_certificate,
+            "bot_handlers": {
+                "message_handlers": len(bot.message_handlers),
+                "callback_handlers": len(bot.callback_query_handlers),
+                "inline_handlers": len(bot.inline_handlers)
+            },
+            "instructions": {
+                "test_bot": "Visit /test_bot to send a test message",
+                "telegram_test": "Send /start to @sjdflakd_bot on Telegram"
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 def setup_webhook():
     """Setup webhook on startup with improved error handling"""
     if config.WEBHOOK_URL:
@@ -2370,14 +2450,19 @@ def main():
                 subscription_manager = SubscriptionManager()
                 logger.info(f"📊 Loaded {len(subscription_manager.users)} subscriptions")
                 
-                # Initialize bot manager
+                # Initialize bot manager (this sets up all the handlers)
                 bot_manager = BotManager()
                 logger.info("🤖 Mobile Number Lookup Bot v2.1 Ready!")
                 logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
                 
+                # Verify bot handlers are registered
+                logger.info(f"📋 Bot handlers registered: {len(bot.message_handlers)} message handlers")
+                logger.info(f"📋 Bot callback handlers registered: {len(bot.callback_query_handlers)} callback handlers")
+                
                 # Setup bot mode based on environment
                 if is_production:
                     logger.info("🌐 Setting up production webhook mode...")
+                    # Don't start polling in webhook mode, just set up webhook
                     setup_webhook_for_render()
                 else:
                     logger.info("🖥️ Setting up local polling mode...")
