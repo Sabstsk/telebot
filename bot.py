@@ -2009,6 +2009,20 @@ def debug_info():
             "timestamp": datetime.now().isoformat()
         }
         
+        # Try to get bot info
+        try:
+            bot_info = bot.get_me()
+            debug_data["bot_info"] = {
+                "username": bot_info.username,
+                "first_name": bot_info.first_name,
+                "id": bot_info.id,
+                "can_join_groups": bot_info.can_join_groups,
+                "can_read_all_group_messages": bot_info.can_read_all_group_messages,
+                "supports_inline_queries": bot_info.supports_inline_queries
+            }
+        except Exception as e:
+            debug_data["bot_info"] = {"error": str(e)}
+        
         # Try to get webhook info if in production
         if config.WEBHOOK_URL:
             try:
@@ -2019,7 +2033,8 @@ def debug_info():
                     "pending_update_count": webhook_info.pending_update_count,
                     "last_error_message": webhook_info.last_error_message,
                     "last_error_date": str(webhook_info.last_error_date) if webhook_info.last_error_date else None,
-                    "max_connections": webhook_info.max_connections
+                    "max_connections": webhook_info.max_connections,
+                    "allowed_updates": webhook_info.allowed_updates
                 }
             except Exception as e:
                 debug_data["webhook_debug"] = {"error": str(e)}
@@ -2029,6 +2044,31 @@ def debug_info():
     except Exception as e:
         return jsonify({
             "error": "Debug endpoint failed",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/test_webhook', methods=['POST'])
+def test_webhook():
+    """Test webhook endpoint to verify it's receiving data"""
+    try:
+        data = request.get_json() or {}
+        headers = dict(request.headers)
+        
+        logger.info(f"🧪 Test webhook received data: {data}")
+        logger.info(f"🧪 Test webhook headers: {headers}")
+        
+        return jsonify({
+            "status": "success",
+            "message": "Test webhook received data",
+            "data_received": data,
+            "headers_received": headers,
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"❌ Test webhook error: {e}")
+        return jsonify({
+            "status": "error",
             "message": str(e),
             "timestamp": datetime.now().isoformat()
         }), 500
@@ -2173,59 +2213,71 @@ class BotManager:
         logger.info("🛑 Bot polling stopped")
 
 def main():
-    """Main application entry point with immediate port binding"""
+    """Main application entry point optimized for Render deployment"""
     try:
         # Print port binding message IMMEDIATELY
         print(f"🚀 Binding to port {config.PORT}...")
-        print(f"🌐 Test interface will be available at: http://localhost:{config.PORT}/")
         
-        # Initialize bot manager in background
-        def init_bot_async():
-            global bot_manager, subscription_manager
+        # Detect environment
+        is_production = bool(config.WEBHOOK_URL and config.WEBHOOK_URL.strip())
+        env_name = "PRODUCTION (Render)" if is_production else "DEVELOPMENT (Local)"
+        print(f"🌐 Environment: {env_name}")
+        
+        if is_production:
+            print(f"🔗 Webhook URL: {config.WEBHOOK_URL}")
+            print(f"📱 Test interface: {config.WEBHOOK_URL}/")
+        else:
+            print(f"📱 Test interface: http://localhost:{config.PORT}/")
+        
+        # Initialize components immediately for production
+        global bot_manager, subscription_manager
+        
+        try:
+            logger.info("🔄 Initializing core components...")
             
+            # Initialize subscription manager first
+            subscription_manager = SubscriptionManager()
+            logger.info(f"📊 Loaded {len(subscription_manager.users)} subscriptions")
+            
+            # Initialize bot manager
+            bot_manager = BotManager()
+            logger.info("🤖 Mobile Number Lookup Bot v2.1 Ready!")
+            logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
+            
+        except Exception as e:
+            logger.error(f"❌ Component initialization failed: {e}")
+            logger.exception("Initialization error:")
+        
+        # Setup bot mode based on environment
+        def setup_bot_mode():
             try:
-                logger.info("🔄 Starting bot initialization...")
-                
-                # Initialize subscription manager first
-                subscription_manager = SubscriptionManager()
-                logger.info(f"📊 Loaded {len(subscription_manager.users)} subscriptions")
-                
-                # Then initialize bot manager
-                bot_manager = BotManager()
-                logger.info("🤖 Mobile Number Lookup Bot v2.1 Starting...")
-                logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
-                
-                # Check if we're in production (Render) or local environment
-                if config.WEBHOOK_URL and config.WEBHOOK_URL.strip():
-                    logger.info("🌐 Production mode detected - Setting up webhook...")
-                    setup_webhook_for_production()
+                if is_production:
+                    logger.info("🌐 Setting up production webhook mode...")
+                    setup_webhook_for_render()
                 else:
-                    logger.info("🖥️ Local mode detected - Starting polling...")
-                    start_bot_polling_async()
-                    
-                logger.info("✅ Bot initialization completed successfully!")
-                    
+                    logger.info("🖥️ Setting up local polling mode...")
+                    setup_local_polling()
             except Exception as e:
-                logger.error(f"❌ Bot initialization failed: {e}")
-                logger.exception("Full error details:")
-                # Continue with Flask even if bot fails
+                logger.error(f"❌ Bot mode setup failed: {e}")
+                logger.exception("Bot setup error:")
         
-        # Start bot initialization in background thread
-        init_thread = threading.Thread(target=init_bot_async, daemon=True)
-        init_thread.start()
+        # Start bot setup in background for production, immediate for local
+        if is_production:
+            # For production, setup after Flask starts
+            setup_thread = threading.Thread(target=setup_bot_mode, daemon=True)
+            setup_thread.start()
+        else:
+            # For local, setup immediately
+            setup_bot_mode()
         
-        # Start Flask app IMMEDIATELY (no delays, no waiting)
-        print(f"🌐 Flask server starting on 0.0.0.0:{config.PORT}")
-        print(f"📱 Visit http://localhost:{config.PORT}/ to see test interface")
-        print(f"🔍 Health check: http://localhost:{config.PORT}/health")
-        print(f"📊 Status check: http://localhost:{config.PORT}/status")
-        print(f"🐛 Debug info: http://localhost:{config.PORT}/debug")
-        if config.WEBHOOK_URL:
-            print(f"🔗 Webhook setup: http://localhost:{config.PORT}/set_webhook")
-        
-        # Configure Flask for better performance
+        # Configure Flask for production
         app.config['JSON_SORT_KEYS'] = False
         app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+        
+        # Start Flask app
+        print(f"🌐 Flask server starting on 0.0.0.0:{config.PORT}")
+        print(f"🔍 Health: {config.WEBHOOK_URL or f'http://localhost:{config.PORT}'}/health")
+        print(f"🐛 Debug: {config.WEBHOOK_URL or f'http://localhost:{config.PORT}'}/debug")
         
         app.run(
             host='0.0.0.0', 
@@ -2251,54 +2303,84 @@ def main():
     finally:
         print("👋 Bot shutdown complete")
 
-def setup_webhook_for_production():
-    """Setup webhook for production deployment (Render)"""
+def setup_webhook_for_render():
+    """Setup webhook specifically for Render deployment"""
     try:
-        # Give Flask time to fully start
-        time.sleep(3)
+        # Wait for Flask to be fully ready
+        logger.info("🔄 Waiting for Flask to be ready...")
+        time.sleep(5)  # Give more time for Render
         
-        logger.info(f"🔗 Setting up webhook for: {config.WEBHOOK_URL}")
+        logger.info(f"🔗 Setting up Render webhook: {config.WEBHOOK_URL}")
         
-        # Remove any existing webhook first
+        # Test bot connection first
         try:
-            bot.remove_webhook()
-            time.sleep(1)
-            logger.info("🗑️ Removed existing webhook")
+            bot_info = bot.get_me()
+            logger.info(f"🤖 Bot connected: @{bot_info.username} ({bot_info.first_name})")
         except Exception as e:
-            logger.warning(f"⚠️ Could not remove existing webhook: {e}")
+            logger.error(f"❌ Bot connection failed: {e}")
+            return
         
-        # Set new webhook
+        # Remove existing webhook
+        try:
+            bot.remove_webhook(drop_pending_updates=True)
+            time.sleep(2)
+            logger.info("🗑️ Cleared existing webhook and pending updates")
+        except Exception as e:
+            logger.warning(f"⚠️ Webhook removal warning: {e}")
+        
+        # Set new webhook with proper URL
         webhook_url = f"{config.WEBHOOK_URL.rstrip('/')}/webhook"
-        result = bot.set_webhook(url=webhook_url)
+        logger.info(f"🔗 Setting webhook to: {webhook_url}")
+        
+        result = bot.set_webhook(
+            url=webhook_url,
+            max_connections=10,
+            drop_pending_updates=True
+        )
         
         if result:
-            logger.info(f"✅ Webhook successfully set to: {webhook_url}")
+            logger.info("✅ Webhook set successfully!")
             
-            # Verify webhook
+            # Verify webhook immediately
+            time.sleep(1)
             webhook_info = bot.get_webhook_info()
-            logger.info(f"📊 Webhook info: {webhook_info.url}")
+            
+            logger.info(f"📊 Webhook verification:")
+            logger.info(f"  URL: {webhook_info.url}")
+            logger.info(f"  Pending updates: {webhook_info.pending_update_count}")
+            logger.info(f"  Max connections: {webhook_info.max_connections}")
+            
             if webhook_info.last_error_message:
-                logger.warning(f"⚠️ Webhook warning: {webhook_info.last_error_message}")
+                logger.error(f"❌ Webhook error: {webhook_info.last_error_message}")
+                logger.error(f"  Error date: {webhook_info.last_error_date}")
+            else:
+                logger.info("✅ No webhook errors detected")
+                
+            logger.info("🎉 Bot is ready for production on Render!")
         else:
             logger.error("❌ Failed to set webhook")
             
-        logger.info("📱 Bot is ready for production! Webhook configured.")
-        
     except Exception as e:
-        logger.error(f"❌ Webhook setup failed: {e}")
-        logger.exception("Webhook setup error details:")
+        logger.error(f"❌ Render webhook setup failed: {e}")
+        logger.exception("Full webhook error:")
 
-def start_bot_polling_async():
-    """Start bot polling for local development"""
+def setup_local_polling():
+    """Setup polling for local development"""
     try:
-        # Give Flask time to bind to port
-        time.sleep(2)
+        logger.info("📱 Setting up local polling mode...")
         
-        logger.info("📱 Bot is ready for local development! Starting polling...")
+        # Clear any existing webhook
+        try:
+            bot.remove_webhook()
+            time.sleep(1)
+            logger.info("🗑️ Cleared webhook for local mode")
+        except:
+            pass
         
-        # Start polling in a separate thread to avoid blocking Flask
+        # Start polling in background
         def polling_worker():
             try:
+                logger.info("🔄 Starting bot polling...")
                 bot_manager.start_polling()
             except Exception as e:
                 logger.error(f"❌ Polling failed: {e}")
@@ -2306,18 +2388,23 @@ def start_bot_polling_async():
         polling_thread = threading.Thread(target=polling_worker, daemon=True)
         polling_thread.start()
         
+        logger.info("🎉 Bot polling started for local development!")
+        
     except Exception as e:
-        logger.error(f"❌ Bot polling setup failed: {e}")
-        logger.exception("Polling setup error details:")
+        logger.error(f"❌ Local polling setup failed: {e}")
+        logger.exception("Polling setup error:")
 
 if __name__ == "__main__":
     # Print immediate startup messages for deployment platforms
     print("=" * 50)
-    print("🚀 TELEGRAM BOT SERVER STARTING")
+    print("  TELEGRAM BOT SERVER STARTING")
     print("=" * 50)
-    print(f"📡 Port: {config.PORT}")
-    print(f"🌐 Host: 0.0.0.0")
-    print(f"⚡ Status: BINDING TO PORT NOW...")
-    print(f"📱 Test Interface: http://localhost:{config.PORT}/")
+    print(f"  Port: {config.PORT}")
+    print(f"  Host: 0.0.0.0")
+    print(f"  Status: BINDING TO PORT NOW...")
+    if config.WEBHOOK_URL:
+        print(f"  Production URL: {config.WEBHOOK_URL}")
+    else:
+        print(f"  Local URL: http://localhost:{config.PORT}/")
     print("=" * 50)
     main()
