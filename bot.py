@@ -2143,41 +2143,88 @@ def fix_webhook():
         logger.info(f"🤖 Bot connected: @{bot_info.username}")
         
         # Remove existing webhook
-        bot.remove_webhook()
-        time.sleep(2)
+        try:
+            bot.remove_webhook()
+            logger.info("🗑️ Removed existing webhook")
+            time.sleep(3)  # Give more time
+        except Exception as e:
+            logger.warning(f"⚠️ Webhook removal warning: {e}")
         
-        # Set new webhook
-        result = bot.set_webhook(
-            url=webhook_url,
-            max_connections=10
-        )
+        # Set new webhook with simple parameters
+        try:
+            result = bot.set_webhook(url=webhook_url)
+            logger.info(f"🔗 Webhook set result: {result}")
+        except Exception as e:
+            logger.error(f"❌ Webhook set failed: {e}")
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to set webhook: {str(e)}"
+            }), 500
         
         if result:
-            time.sleep(1)
-            webhook_info = bot.get_webhook_info()
-            
-            return jsonify({
-                "status": "success",
-                "message": "Webhook fixed successfully!",
-                "bot_info": {
-                    "username": bot_info.username,
-                    "first_name": bot_info.first_name
-                },
-                "webhook_info": {
-                    "url": webhook_info.url,
-                    "pending_updates": webhook_info.pending_update_count,
-                    "last_error": webhook_info.last_error_message,
-                    "max_connections": webhook_info.max_connections
-                }
-            })
+            time.sleep(2)  # Give time for webhook to register
+            try:
+                webhook_info = bot.get_webhook_info()
+                logger.info(f"📊 Webhook info: URL={webhook_info.url}, Pending={webhook_info.pending_update_count}")
+                
+                return jsonify({
+                    "status": "success",
+                    "message": "Webhook fixed successfully!",
+                    "bot_info": {
+                        "username": bot_info.username,
+                        "first_name": bot_info.first_name,
+                        "id": bot_info.id
+                    },
+                    "webhook_info": {
+                        "url": webhook_info.url,
+                        "pending_updates": webhook_info.pending_update_count,
+                        "last_error": webhook_info.last_error_message,
+                        "has_custom_certificate": webhook_info.has_custom_certificate
+                    }
+                })
+            except Exception as e:
+                logger.error(f"❌ Failed to get webhook info: {e}")
+                return jsonify({
+                    "status": "partial_success",
+                    "message": "Webhook set but couldn't verify",
+                    "bot_info": {
+                        "username": bot_info.username,
+                        "first_name": bot_info.first_name
+                    },
+                    "error": str(e)
+                })
         else:
             return jsonify({
                 "status": "error",
-                "message": "Failed to set webhook"
+                "message": "Failed to set webhook - bot.set_webhook returned False"
             }), 500
             
     except Exception as e:
-        logger.error(f"Quick webhook fix failed: {e}")
+        logger.error(f"❌ Quick webhook fix failed: {e}")
+        logger.exception("Full error details:")
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "webhook_url": "https://telebot-1-2tl0.onrender.com/webhook"
+        }), 500
+
+@app.route('/force_webhook', methods=['GET'])
+def force_webhook():
+    """Force webhook setup with minimal parameters"""
+    try:
+        webhook_url = "https://telebot-1-2tl0.onrender.com/webhook"
+        
+        # Simple webhook setup
+        result = bot.set_webhook(webhook_url)
+        
+        return jsonify({
+            "status": "success" if result else "failed",
+            "webhook_url": webhook_url,
+            "result": result,
+            "message": "Webhook force set completed"
+        })
+        
+    except Exception as e:
         return jsonify({
             "status": "error",
             "message": str(e)
