@@ -11,18 +11,21 @@ import logging
 import threading
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string, send_from_directory
 from typing import Optional, Tuple, Dict, Any
 
-# Configure logging
+# Configure logging with better performance
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('bot.log'),
+        logging.FileHandler('bot.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
+
+# Optimize logging for better performance
+logging.getLogger('werkzeug').setLevel(logging.WARNING)  # Reduce Flask logs
 logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
@@ -327,6 +330,9 @@ telebot.apihelper.CONNECT_TIMEOUT = 15
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.urandom(24)
 
+# Set template folder to current directory
+app.template_folder = os.path.dirname(os.path.abspath(__file__))
+
 # simple number validator: allow optional +, digits, 10-15 digits total
 NUMBER_RE = re.compile(r'^\+?\d{10,15}$')
 
@@ -540,9 +546,10 @@ def is_admin_by_user_id(user_id: int, username: Optional[str]) -> bool:
         return True
     
     # Check subscription manager for admin status
-    user_sub = subscription_manager.users.get(user_id)
-    if user_sub and user_sub.get('is_admin', False):
-        return True
+    if subscription_manager:
+        user_sub = subscription_manager.users.get(user_id)
+        if user_sub and user_sub.get('is_admin', False):
+            return True
     
     return False
 
@@ -1219,6 +1226,9 @@ Select an option below:
             return
         
         subs_text = "💎 **SUBSCRIPTION MANAGEMENT** 💎\n\n"
+        # Use subscription_manager.users instead of undefined user_subscriptions
+        user_subscriptions = subscription_manager.users if subscription_manager else {}
+        
         if not user_subscriptions:
             subs_text += "No subscription users found."
         else:
@@ -1838,182 +1848,33 @@ Choose an option below or send a valid mobile number! 👇
         """
         bot.send_message(message.chat.id, suggestion_text, reply_markup=create_main_keyboard(), parse_mode='Markdown')
 
-# Flask routes for webhook
+
 @app.route('/', methods=['GET'])
-def index():
-    """Health check endpoint and server status page"""
+def home():
+    """Serve the test interface HTML file"""
     try:
-        admin_username = getattr(config, 'ADMIN_USERNAME', 'CRAZYPANEL1')
-        bot_token = getattr(config, 'BOT_TOKEN', 'unknown')
-        
-        return """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Mobile Number Lookup Bot</title>
-        <style>
-            body {
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                margin: 0;
-                padding: 0;
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                color: white;
-            }
-            .container {
-                text-align: center;
-                padding: 2rem;
-                background: rgba(255, 255, 255, 0.1);
-                border-radius: 20px;
-                backdrop-filter: blur(10px);
-                box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
-                border: 1px solid rgba(255, 255, 255, 0.18);
-                max-width: 500px;
-                margin: 20px;
-            }
-            .status-badge {
-                background: #10b981;
-                color: white;
-                padding: 8px 16px;
-                border-radius: 20px;
-                font-size: 14px;
-                font-weight: bold;
-                display: inline-block;
-                margin-bottom: 20px;
-                animation: pulse 2s infinite;
-            }
-            @keyframes pulse {
-                0% { transform: scale(1); }
-                50% { transform: scale(1.05); }
-                100% { transform: scale(1); }
-            }
-            h1 {
-                font-size: 2.5rem;
-                margin-bottom: 1rem;
-                text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-            }
-            .bot-emoji {
-                font-size: 4rem;
-                margin-bottom: 1rem;
-                animation: bounce 2s infinite;
-            }
-            @keyframes bounce {
-                0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
-                40% { transform: translateY(-10px); }
-                60% { transform: translateY(-5px); }
-            }
-            .info {
-                background: rgba(255, 255, 255, 0.2);
-                padding: 1.5rem;
-                border-radius: 15px;
-                margin: 20px 0;
-                text-align: left;
-            }
-            .info h3 {
-                margin-top: 0;
-                color: #fbbf24;
-            }
-            .admin-info {
-                background: rgba(16, 185, 129, 0.2);
-                padding: 1rem;
-                border-radius: 10px;
-                margin-top: 20px;
-            }
-            .telegram-link {
-                display: inline-block;
-                background: #0088cc;
-                color: white;
-                padding: 12px 24px;
-                border-radius: 25px;
-                text-decoration: none;
-                font-weight: bold;
-                margin-top: 20px;
-                transition: all 0.3s ease;
-            }
-            .telegram-link:hover {
-                background: #006699;
-                transform: translateY(-2px);
-                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            }
-            .stats {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-                gap: 15px;
-                margin-top: 20px;
-            }
-            .stat-item {
-                background: rgba(255, 255, 255, 0.1);
-                padding: 15px;
-                border-radius: 10px;
-                text-align: center;
-            }
-            .stat-number {
-                font-size: 1.5rem;
-                font-weight: bold;
-                color: #fbbf24;
-            }
-            .stat-label {
-                font-size: 0.9rem;
-                opacity: 0.8;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🤖 Mobile Number Lookup Bot</h1>
-            <p>✅ Server is running successfully!</p>
-            <p>🚀 Bot is ready to receive Telegram messages.</p>
-            <p>👑 Admin: @CRAZYPANEL1</p>
-            <p>🌐 Port: """ + str(config.PORT) + """</p>
-            <p>⏰ Started: """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + """</p>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-number">🚀</div>
-                    <div class="stat-label">Ready</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-number">⚡</div>
-                    <div class="stat-label">Fast</div>
-                </div>
-            </div>
-            
-            <div class="admin-info">
-                <strong>👑 Admin:</strong> @""" + admin_username + """<br>
-                <strong>🌐 Status:</strong> All systems operational<br>
-                <strong>📡 API:</strong> Connected
-            </div>
-            
-            <a href="https://t.me/""" + bot_token.split(':')[0] + """" class="telegram-link" target="_blank">
-                📱 Open Bot in Telegram
-            </a>
-            
-            <p style="margin-top: 30px; opacity: 0.7; font-size: 0.9rem;">
-                🔧 Powered by Flask & Python | 🚀 Deployed Successfully
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-    except Exception as e:
-        # Return simple HTML if there's any error
-        return f"""
-        <html>
-        <head><title>Mobile Number Lookup Bot</title></head>
-        <body style="font-family: Arial; text-align: center; padding: 50px; background: #667eea; color: white;">
-            <h1>🤖 Mobile Number Lookup Bot</h1>
-            <p>✅ Server is running successfully!</p>
-            <p>🚀 Bot is ready to receive Telegram messages.</p>
-            <p>👑 Admin: @CRAZYPANEL1</p>
-            <p>🌐 Port: {config.PORT}</p>
-            <p>⏰ Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-        </body>
-        </html>
-        """
+        # Try to read from current directory first
+        html_file_path = os.path.join(os.path.dirname(__file__), 'test_interface.html')
+        if os.path.exists(html_file_path):
+            with open(html_file_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            return html_content
+        else:
+            # Fallback to current working directory
+            with open('test_interface.html', 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            return html_content
+    except (FileNotFoundError, IOError) as e:
+        logger.warning(f"Could not load test_interface.html: {e}")
+        return """<!DOCTYPE html>
+<html><head><title>Bot Server</title><meta charset="UTF-8"></head>
+<body style="font-family: Arial, sans-serif; text-align: center; padding: 50px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; min-height: 100vh; margin: 0;">
+<h1>🤖 Telegram Bot Server is Running!</h1>
+<p style="font-size: 1.2em;">✅ Server is online and ready</p>
+<p>📱 Bot is operational</p>
+<p>👑 Admin: @CRAZYPANEL1</p>
+<p style="margin-top: 30px; opacity: 0.8;">Port: {}</p>
+</body></html>""".format(config.PORT)
 
 @app.route('/ping', methods=['GET'])
 def ping():
@@ -2040,24 +1901,45 @@ def webhook():
 @app.route('/health', methods=['GET'])
 def health_check():
     """Additional health check endpoint"""
-    uptime = datetime.now() - bot_stats["start_time"]
-    return jsonify({
-        "status": "healthy",
-        "uptime": str(uptime).split('.')[0],
-        "total_searches": bot_stats['total_searches'],
-        "active_users": len(search_history),
-        "timestamp": datetime.now().isoformat()
-    })
+    try:
+        uptime = datetime.now() - bot_stats["start_time"]
+        return jsonify({
+            "status": "healthy",
+            "uptime": str(uptime).split('.')[0],
+            "total_searches": bot_stats['total_searches'],
+            "active_users": len(search_history),
+            "subscription_users": len(subscription_manager.users) if subscription_manager else 0,
+            "bot_version": "2.1",
+            "admin": config.ADMIN_USERNAME,
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 @app.route('/status', methods=['GET'])
 def status_check():
     """Simple status endpoint for deployment platforms"""
-    return jsonify({
-        "status": "online",
-        "message": "Server is ready! 🚀",
-        "bot_running": True,
-        "port": config.PORT
-    })
+    try:
+        bot_status = bool(subscription_manager and bot_manager)
+        return jsonify({
+            "status": "online",
+            "message": "Server is ready! 🚀",
+            "bot_running": bot_status,
+            "port": config.PORT,
+            "test_interface": f"http://localhost:{config.PORT}/",
+            "version": "2.1"
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "partial",
+            "message": "Server running but bot may have issues",
+            "error": str(e),
+            "port": config.PORT
+        }), 200
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
@@ -2180,25 +2062,30 @@ def main():
     try:
         # Print port binding message IMMEDIATELY
         print(f"🚀 Binding to port {config.PORT}...")
+        print(f"🌐 Test interface will be available at: http://localhost:{config.PORT}/")
         
         # Initialize bot manager in background
         def init_bot_async():
             global bot_manager, subscription_manager
             
-            # Initialize subscription manager first
-            subscription_manager = SubscriptionManager()
-            
-            # Then initialize bot manager
-            bot_manager = BotManager()
-            logger.info("🤖 Mobile Number Lookup Bot v2.1 Starting...")
-            logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
-            
-            if config.WEBHOOK_URL:
-                logger.info("🌐 Running in webhook mode for production...")
-                setup_webhook_async()
-            else:
-                logger.info("🔄 Running in hybrid mode (Flask + Polling)...")
-                start_bot_async()
+            try:
+                # Initialize subscription manager first
+                subscription_manager = SubscriptionManager()
+                
+                # Then initialize bot manager
+                bot_manager = BotManager()
+                logger.info("🤖 Mobile Number Lookup Bot v2.1 Starting...")
+                logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
+                
+                if config.WEBHOOK_URL:
+                    logger.info("🌐 Running in webhook mode for production...")
+                    setup_webhook_async()
+                else:
+                    logger.info("🔄 Running in hybrid mode (Flask + Polling)...")
+                    start_bot_async()
+            except Exception as e:
+                logger.error(f"❌ Bot initialization failed: {e}")
+                # Continue with Flask even if bot fails
         
         # Start bot initialization in background thread
         init_thread = threading.Thread(target=init_bot_async, daemon=True)
@@ -2206,6 +2093,14 @@ def main():
         
         # Start Flask app IMMEDIATELY (no delays, no waiting)
         print(f"🌐 Flask server starting on 0.0.0.0:{config.PORT}")
+        print(f"📱 Visit http://localhost:{config.PORT}/ to see test interface")
+        print(f"🔍 Health check: http://localhost:{config.PORT}/health")
+        print(f"📊 Status check: http://localhost:{config.PORT}/status")
+        
+        # Configure Flask for better performance
+        app.config['JSON_SORT_KEYS'] = False
+        app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+        
         app.run(
             host='0.0.0.0', 
             port=config.PORT, 
@@ -2223,6 +2118,7 @@ def main():
         # Emergency Flask startup
         try:
             print(f"🚨 Emergency Flask startup on port {config.PORT}")
+            print(f"📱 Emergency test interface: http://localhost:{config.PORT}/")
             app.run(host='0.0.0.0', port=config.PORT, debug=False, threaded=True)
         except:
             raise e
@@ -2257,5 +2153,6 @@ if __name__ == "__main__":
     print(f"📡 Port: {config.PORT}")
     print(f"🌐 Host: 0.0.0.0")
     print(f"⚡ Status: BINDING TO PORT NOW...")
+    print(f"📱 Test Interface: http://localhost:{config.PORT}/")
     print("=" * 50)
     main()
