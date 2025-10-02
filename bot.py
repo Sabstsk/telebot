@@ -1,18 +1,3 @@
-# telegram_number_bot.py
-# Simple Telegram bot that calls:
-# https://flipcartstore.serv00.net/INFO.php?api_key=chxInfo&mobile=<mobile>
-#
-# Requirements:
-#   pip install pyTelegramBotAPI requests
-#
-# Usage:
-# 1) Create a .env file with your BOT_TOKEN and CHAT_ID (see .env file)
-# 2) Install dependencies: pip install -r requirements.txt
-# 3) Run: python bot.py
-# 4) In Telegram send: /check 9876543210   OR just send the number.
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import telebot
 from telebot import types
@@ -305,8 +290,8 @@ class SubscriptionManager:
             logger.error(f"❌ Error verifying subscription persistence: {e}")
             return False
 
-# Initialize subscription manager
-subscription_manager = SubscriptionManager()
+# Initialize subscription manager (will be done in background for faster startup)
+subscription_manager = None
 
 # Storage for search history and stats
 search_history = {}  # user_id: [list of searches]
@@ -422,6 +407,12 @@ def create_main_keyboard():
 
 def get_user_subscription(user_id: int, username: Optional[str] = None, first_name: Optional[str] = None) -> Dict[str, Any]:
     """Get user's current subscription status with improved handling"""
+    
+    # Wait for subscription manager to be initialized
+    global subscription_manager
+    if subscription_manager is None:
+        # Fallback initialization if not ready
+        subscription_manager = SubscriptionManager()
     
     # Reload subscriptions if file has been modified
     subscription_manager.reload_if_needed()
@@ -1998,6 +1989,11 @@ def ping():
     """Simple ping endpoint for health checks"""
     return "pong", 200
 
+@app.route('/ready', methods=['GET'])
+def ready():
+    """Immediate readiness check for deployment platforms"""
+    return f"READY ON PORT {config.PORT}", 200
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Handle incoming webhook requests from Telegram"""
@@ -2150,49 +2146,57 @@ class BotManager:
 
 def main():
     """Main application entry point with immediate port binding"""
-    # Initialize bot manager here to ensure proper startup order
-    global bot_manager
-    bot_manager = BotManager()
-    
     try:
-        logger.info("🤖 Mobile Number Lookup Bot v2.1 Starting...")
-        logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
-        logger.info(f"🚀 Flask app binding to port {config.PORT} immediately...")
+        # Print port binding message IMMEDIATELY
+        print(f"🚀 Binding to port {config.PORT}...")
         
-        # Start Flask app immediately to bind to port (critical for deployment platforms)
-        if config.WEBHOOK_URL:
-            logger.info("🌐 Running in webhook mode for production...")
-            # Setup webhook in a separate thread to avoid blocking port binding
-            webhook_thread = threading.Thread(target=setup_webhook_async, daemon=True)
-            webhook_thread.start()
+        # Initialize bot manager in background
+        def init_bot_async():
+            global bot_manager, subscription_manager
             
-            logger.info(f"🌐 Flask app starting on port {config.PORT}")
-            app.run(host='0.0.0.0', port=config.PORT, debug=False, threaded=True)
-        else:
-            logger.info("🔄 Running in hybrid mode (Flask + Polling)...")
+            # Initialize subscription manager first
+            subscription_manager = SubscriptionManager()
             
-            # Start bot polling in a separate thread (non-blocking)
-            polling_thread = threading.Thread(target=start_bot_async, daemon=True)
-            polling_thread.start()
+            # Then initialize bot manager
+            bot_manager = BotManager()
+            logger.info("🤖 Mobile Number Lookup Bot v2.1 Starting...")
+            logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
             
-            # Run Flask app immediately (this binds to port right away)
-            logger.info(f"🌐 Flask app starting on port {config.PORT}")
-            app.run(host='0.0.0.0', port=config.PORT, debug=False, use_reloader=False, threaded=True)
+            if config.WEBHOOK_URL:
+                logger.info("🌐 Running in webhook mode for production...")
+                setup_webhook_async()
+            else:
+                logger.info("🔄 Running in hybrid mode (Flask + Polling)...")
+                start_bot_async()
+        
+        # Start bot initialization in background thread
+        init_thread = threading.Thread(target=init_bot_async, daemon=True)
+        init_thread.start()
+        
+        # Start Flask app IMMEDIATELY (no delays, no waiting)
+        print(f"🌐 Flask server starting on 0.0.0.0:{config.PORT}")
+        app.run(
+            host='0.0.0.0', 
+            port=config.PORT, 
+            debug=False, 
+            use_reloader=False, 
+            threaded=True
+        )
             
     except KeyboardInterrupt:
-        logger.info("🛑 Received shutdown signal")
+        print("🛑 Received shutdown signal")
         if 'bot_manager' in globals():
             bot_manager.stop()
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
-        # Still try to start Flask even if there's an error
+        print(f"❌ Fatal error: {e}")
+        # Emergency Flask startup
         try:
-            logger.info(f"🚨 Starting Flask in emergency mode on port {config.PORT}")
+            print(f"🚨 Emergency Flask startup on port {config.PORT}")
             app.run(host='0.0.0.0', port=config.PORT, debug=False, threaded=True)
         except:
             raise e
     finally:
-        logger.info("👋 Bot shutdown complete")
+        print("👋 Bot shutdown complete")
 
 def setup_webhook_async():
     """Setup webhook asynchronously to avoid blocking port binding"""
@@ -2215,7 +2219,12 @@ def start_bot_async():
         logger.error(f"❌ Bot polling failed: {e}")
 
 if __name__ == "__main__":
-    # Print immediate startup message for deployment platforms
-    print(f"🚀 Starting Flask server on port {config.PORT}...")
-    print(f"🌐 Server will be available at http://0.0.0.0:{config.PORT}")
+    # Print immediate startup messages for deployment platforms
+    print("=" * 50)
+    print("🚀 TELEGRAM BOT SERVER STARTING")
+    print("=" * 50)
+    print(f"📡 Port: {config.PORT}")
+    print(f"🌐 Host: 0.0.0.0")
+    print(f"⚡ Status: BINDING TO PORT NOW...")
+    print("=" * 50)
     main()
