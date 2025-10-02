@@ -99,15 +99,17 @@ class SubscriptionManager:
         self.subscription_file = config.SUBSCRIPTION_FILE
         self.users = {}
         self._lock = threading.Lock()
+        self._last_loaded = None
         self.load_subscriptions()
         self._ensure_admin_subscription()
     
-    def load_subscriptions(self) -> Dict[int, Dict[str, Any]]:
+    def load_subscriptions(self) -> None:
         """Load subscription data from JSON file with error handling"""
         try:
             if not os.path.exists(self.subscription_file):
                 logger.info("📄 No subscription file found, starting fresh")
-                return {}
+                self.users = {}
+                return
             
             with open(self.subscription_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -127,20 +129,45 @@ class SubscriptionManager:
                             sub_data["created_date"] = datetime.fromisoformat(sub_data["created_date"])
                         
                         loaded_users[user_id] = sub_data
+                        logger.debug(f"✅ Loaded user {user_id}: {sub_data.get('plan', 'unknown')} plan")
+                        
                     except (ValueError, TypeError) as e:
                         logger.warning(f"⚠️ Skipping invalid user data for {user_id_str}: {e}")
                         continue
                 
                 self.users = loaded_users
-                logger.info(f"📊 Loaded {len(loaded_users)} user subscriptions")
-                return loaded_users
+                self._last_loaded = datetime.now()
+                logger.info(f"📊 Successfully loaded {len(loaded_users)} user subscriptions")
+                
+                # Debug: Print loaded users for verification
+                for user_id, sub_data in loaded_users.items():
+                    plan = sub_data.get('plan', 'unknown')
+                    expires = sub_data.get('expires', 'Never')
+                    admin_status = " (ADMIN)" if sub_data.get('is_admin', False) else ""
+                    logger.info(f"  👤 User {user_id}: {plan} plan (expires: {expires}){admin_status}")
                 
         except (json.JSONDecodeError, FileNotFoundError) as e:
             logger.error(f"❌ Error loading subscriptions: {e}")
-            return {}
+            self.users = {}
+            self._last_loaded = datetime.now()
         except Exception as e:
             logger.error(f"❌ Unexpected error loading subscriptions: {e}")
-            return {}
+            self.users = {}
+            self._last_loaded = datetime.now()
+    
+    def reload_if_needed(self) -> None:
+        """Reload subscriptions if file has been modified"""
+        try:
+            if not os.path.exists(self.subscription_file):
+                return
+            
+            file_mtime = datetime.fromtimestamp(os.path.getmtime(self.subscription_file))
+            
+            if self._last_loaded is None or file_mtime > self._last_loaded:
+                logger.info("🔄 Subscription file modified, reloading...")
+                self.load_subscriptions()
+        except Exception as e:
+            logger.warning(f"⚠️ Could not check file modification time: {e}")
 
     def save_subscriptions(self) -> bool:
         """Save subscription data to JSON file with thread safety"""
@@ -172,11 +199,19 @@ class SubscriptionManager:
                 # Create backup before saving
                 if os.path.exists(self.subscription_file):
                     backup_file = f"{self.subscription_file}.backup"
-                    os.rename(self.subscription_file, backup_file)
+                    try:
+                        if os.path.exists(backup_file):
+                            os.remove(backup_file)  # Remove old backup
+                        os.rename(self.subscription_file, backup_file)
+                        logger.debug(f"📋 Created backup: {backup_file}")
+                    except Exception as backup_error:
+                        logger.warning(f"⚠️ Backup creation failed: {backup_error}")
                 
                 with open(self.subscription_file, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 
+                # Update last loaded time after successful save
+                self._last_loaded = datetime.now()
                 logger.info(f"💾 Saved {len(users_data)} user subscriptions")
                 return True
                 
@@ -239,6 +274,36 @@ class SubscriptionManager:
                     'payment_amount': 0
                 })
                 self.save_subscriptions()
+    
+    def verify_subscription_persistence(self, user_id: int) -> bool:
+        """Verify that a user's subscription persists after reload"""
+        try:
+            # Get current subscription
+            current_sub = self.users.get(user_id)
+            if not current_sub:
+                return False
+            
+            # Force reload from file
+            self.load_subscriptions()
+            
+            # Check if subscription still exists
+            reloaded_sub = self.users.get(user_id)
+            if not reloaded_sub:
+                logger.error(f"❌ Subscription for user {user_id} lost after reload!")
+                return False
+            
+            # Verify key fields match
+            if (current_sub.get('plan') == reloaded_sub.get('plan') and
+                current_sub.get('user_id') == reloaded_sub.get('user_id')):
+                logger.info(f"✅ Subscription persistence verified for user {user_id}")
+                return True
+            else:
+                logger.error(f"❌ Subscription data mismatch for user {user_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error verifying subscription persistence: {e}")
+            return False
 
 # Initialize subscription manager
 subscription_manager = SubscriptionManager()
@@ -357,35 +422,47 @@ def create_main_keyboard():
 
 def get_user_subscription(user_id: int, username: Optional[str] = None, first_name: Optional[str] = None) -> Dict[str, Any]:
     """Get user's current subscription status with improved handling"""
+    
+    # Reload subscriptions if file has been modified
+    subscription_manager.reload_if_needed()
+    
     # Check if user exists in subscription manager
     if user_id not in subscription_manager.users:
+        logger.info(f"👤 New user detected: {user_id} ({username})")
+        
         # Check if user is admin
         is_admin = is_admin_by_user_id(user_id, username)
         
         if is_admin:
             # Admin gets lifetime access
+            logger.info(f"👑 Creating admin subscription for {user_id}")
             return subscription_manager.add_subscription_user(
                 user_id, username or config.ADMIN_USERNAME, first_name or "Admin", "lifetime", 0
             )
         else:
             # New user gets free plan
+            logger.info(f"🆓 Creating free subscription for {user_id}")
             return subscription_manager.add_subscription_user(
                 user_id, username, first_name, "free", 0
             )
     
     subscription = subscription_manager.users[user_id]
+    logger.debug(f"📋 Found existing subscription for {user_id}: {subscription.get('plan', 'unknown')} plan")
     
     # Update user details if provided
     updated = False
     if username and subscription.get("username") != username:
         subscription["username"] = username
         updated = True
+        logger.debug(f"📝 Updated username for {user_id}: {username}")
     if first_name and subscription.get("first_name") != first_name:
         subscription["first_name"] = first_name
         updated = True
+        logger.debug(f"📝 Updated first_name for {user_id}: {first_name}")
     
     # Check if subscription expired
     if subscription["expires"] and datetime.now() > subscription["expires"]:
+        logger.warning(f"⏰ Subscription expired for {user_id}, downgrading to free")
         subscription["plan"] = "free"
         subscription["expires"] = None
         subscription["status"] = "expired"
@@ -396,9 +473,11 @@ def get_user_subscription(user_id: int, username: Optional[str] = None, first_na
         subscription["searches_used"] = 0
         subscription["last_reset"] = datetime.now().date()
         updated = True
+        logger.debug(f"🔄 Reset daily search count for {user_id}")
     
     if updated:
         subscription_manager.save_subscriptions()
+        logger.debug(f"💾 Saved updated subscription for {user_id}")
     
     return subscription
 
@@ -799,6 +878,41 @@ def contact_info(message):
 🔒 **Privacy:** All conversations are confidential
     """
     bot.send_message(message.chat.id, contact_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['verify_subs'])
+def verify_subscriptions(message):
+    """Admin command to verify subscription persistence"""
+    if not is_admin(message):
+        bot.reply_to(message, "❌ Access Denied! Admin only command.")
+        return
+    
+    try:
+        # Test subscription persistence for all users
+        total_users = len(subscription_manager.users)
+        verified_count = 0
+        
+        for user_id in list(subscription_manager.users.keys()):
+            if subscription_manager.verify_subscription_persistence(user_id):
+                verified_count += 1
+        
+        result_text = f"""
+🔍 **Subscription Persistence Test** 🔍
+
+📊 **Results:**
+• Total Users: {total_users}
+• Verified: {verified_count}
+• Failed: {total_users - verified_count}
+
+✅ **Status:** {'All subscriptions verified!' if verified_count == total_users else 'Some subscriptions have issues!'}
+
+📁 **File:** {subscription_manager.subscription_file}
+⏰ **Last Loaded:** {subscription_manager._last_loaded}
+        """
+        
+        bot.send_message(message.chat.id, result_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error during verification: {e}")
 
 @bot.message_handler(commands=['pricing'])
 def show_pricing(message):
@@ -1844,25 +1958,12 @@ def index():
     </head>
     <body>
         <div class="container">
-            <div class="status-badge">🟢 SERVER IS READY</div>
-            <div class="bot-emoji">🤖</div>
-            <h1>Mobile Number Lookup Bot</h1>
-            <p style="font-size: 1.2rem; opacity: 0.9;">Your Telegram bot is running successfully!</p>
-            
-            <div class="info">
-                <h3>📱 Bot Features</h3>
-                <ul style="text-align: left;">
-                    <li>🔍 Mobile number lookup</li>
-                    <li>📊 Search history tracking</li>
-                    <li>💎 Subscription management</li>
-                    <li>👑 Admin panel</li>
-                </ul>
-            </div>
-            
-            <div class="stats">
-                <div class="stat-item">
-                    <div class="stat-number">✅</div>
-                    <div class="stat-label">Online</div>
+            <h1>🤖 Mobile Number Lookup Bot</h1>
+            <p>✅ Server is running successfully!</p>
+            <p>🚀 Bot is ready to receive Telegram messages.</p>
+            <p>👑 Admin: @CRAZYPANEL1</p>
+            <p>🌐 Port: """ + str(config.PORT) + """</p>
+            <p>⏰ Started: """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + """</p>
                 </div>
                 <div class="stat-item">
                     <div class="stat-number">🚀</div>
@@ -1891,6 +1992,11 @@ def index():
     </body>
     </html>
     """
+
+@app.route('/ping', methods=['GET'])
+def ping():
+    """Simple ping endpoint for health checks"""
+    return "pong", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -1923,15 +2029,15 @@ def status_check():
         "status": "online",
         "message": "Server is ready! 🚀",
         "bot_running": True,
-        "port": PORT
+        "port": config.PORT
     })
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     """Set webhook URL (for manual setup if needed)"""
-    if WEBHOOK_URL:
+    if config.WEBHOOK_URL:
         try:
-            webhook_url = f"{WEBHOOK_URL}/webhook"
+            webhook_url = f"{config.WEBHOOK_URL}/webhook"
             bot.remove_webhook()
             bot.set_webhook(url=webhook_url)
             return jsonify({
@@ -2042,44 +2148,74 @@ class BotManager:
         self.is_running = False
         logger.info("🛑 Bot polling stopped")
 
-# Initialize bot manager
-bot_manager = BotManager()
-
 def main():
-    """Main application entry point"""
+    """Main application entry point with immediate port binding"""
+    # Initialize bot manager here to ensure proper startup order
+    global bot_manager
+    bot_manager = BotManager()
+    
     try:
         logger.info("🤖 Mobile Number Lookup Bot v2.1 Starting...")
         logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
-        logger.info(f"📊 Loaded {len(subscription_manager.users)} user subscriptions")
-        logger.info("📱 Bot is ready! Send /start to begin.")
+        logger.info(f"🚀 Flask app binding to port {config.PORT} immediately...")
         
-        # Always run Flask app to bind to port (required for deployment platforms)
+        # Start Flask app immediately to bind to port (critical for deployment platforms)
         if config.WEBHOOK_URL:
             logger.info("🌐 Running in webhook mode for production...")
-            setup_webhook()
-            logger.info(f"🚀 Flask app starting on port {config.PORT}")
-            app.run(host='0.0.0.0', port=config.PORT, debug=False)
+            # Setup webhook in a separate thread to avoid blocking port binding
+            webhook_thread = threading.Thread(target=setup_webhook_async, daemon=True)
+            webhook_thread.start()
+            
+            logger.info(f"🌐 Flask app starting on port {config.PORT}")
+            app.run(host='0.0.0.0', port=config.PORT, debug=False, threaded=True)
         else:
             logger.info("🔄 Running in hybrid mode (Flask + Polling)...")
-            logger.info(f"🌐 Flask server will run on port {config.PORT}")
-            logger.info("🤖 Bot will use polling for Telegram updates")
             
-            # Start bot polling in a separate thread
-            polling_thread = threading.Thread(target=bot_manager.start_polling, daemon=True)
+            # Start bot polling in a separate thread (non-blocking)
+            polling_thread = threading.Thread(target=start_bot_async, daemon=True)
             polling_thread.start()
             
-            # Run Flask app (this keeps the main thread alive and binds to port)
-            logger.info(f"🚀 Flask app starting on port {config.PORT}")
-            app.run(host='0.0.0.0', port=config.PORT, debug=False, use_reloader=False)
+            # Run Flask app immediately (this binds to port right away)
+            logger.info(f"🌐 Flask app starting on port {config.PORT}")
+            app.run(host='0.0.0.0', port=config.PORT, debug=False, use_reloader=False, threaded=True)
             
     except KeyboardInterrupt:
         logger.info("🛑 Received shutdown signal")
-        bot_manager.stop()
+        if 'bot_manager' in globals():
+            bot_manager.stop()
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
-        raise
+        # Still try to start Flask even if there's an error
+        try:
+            logger.info(f"🚨 Starting Flask in emergency mode on port {config.PORT}")
+            app.run(host='0.0.0.0', port=config.PORT, debug=False, threaded=True)
+        except:
+            raise e
     finally:
         logger.info("👋 Bot shutdown complete")
 
+def setup_webhook_async():
+    """Setup webhook asynchronously to avoid blocking port binding"""
+    try:
+        time.sleep(2)  # Give Flask time to start
+        setup_webhook()
+        logger.info(f"📊 Loaded {len(subscription_manager.users)} user subscriptions")
+        logger.info("📱 Bot is ready! Send /start to begin.")
+    except Exception as e:
+        logger.error(f"❌ Webhook setup failed: {e}")
+
+def start_bot_async():
+    """Start bot polling asynchronously"""
+    try:
+        time.sleep(1)  # Give Flask time to bind to port
+        logger.info(f"📊 Loaded {len(subscription_manager.users)} user subscriptions")
+        logger.info("📱 Bot is ready! Send /start to begin.")
+        bot_manager.start_polling()
+    except Exception as e:
+        logger.error(f"❌ Bot polling failed: {e}")
+
 if __name__ == "__main__":
+    # Print immediate startup message for deployment platforms
+    print(f"🚀 Starting Flask server on port {config.PORT}...")
+    print(f"🌐 Server will be available at http://0.0.0.0:{config.PORT}")
     main()
