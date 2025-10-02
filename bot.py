@@ -2089,15 +2089,14 @@ def set_webhook():
         logger.info(f"🔧 Manual webhook setup to: {webhook_url}")
         
         # Remove existing webhook first
-        bot.remove_webhook(drop_pending_updates=True)
+        bot.remove_webhook()
         time.sleep(2)
         logger.info("🗑️ Removed existing webhook")
         
         # Set new webhook
         result = bot.set_webhook(
             url=webhook_url,
-            max_connections=10,
-            drop_pending_updates=True
+            max_connections=10
         )
         
         if result:
@@ -2144,14 +2143,13 @@ def fix_webhook():
         logger.info(f"🤖 Bot connected: @{bot_info.username}")
         
         # Remove existing webhook
-        bot.remove_webhook(drop_pending_updates=True)
+        bot.remove_webhook()
         time.sleep(2)
         
         # Set new webhook
         result = bot.set_webhook(
             url=webhook_url,
-            max_connections=10,
-            drop_pending_updates=True
+            max_connections=10
         )
         
         if result:
@@ -2396,9 +2394,9 @@ def setup_webhook_for_render():
         
         # Remove existing webhook
         try:
-            bot.remove_webhook(drop_pending_updates=True)
+            bot.remove_webhook()
             time.sleep(2)
-            logger.info("🗑️ Cleared existing webhook and pending updates")
+            logger.info("🗑️ Cleared existing webhook")
         except Exception as e:
             logger.warning(f"⚠️ Webhook removal warning: {e}")
         
@@ -2408,8 +2406,7 @@ def setup_webhook_for_render():
         
         result = bot.set_webhook(
             url=webhook_url,
-            max_connections=10,
-            drop_pending_updates=True
+            max_connections=10
         )
         
         if result:
