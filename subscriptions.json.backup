@@ -10,7 +10,7 @@
       "expires": "2125-08-31T19:45:00.605545",
       "searches_used": 0,
       "last_reset": "2025-10-02",
-      "total_searches": 2,
+      "total_searches": 3,
       "status": "active",
       "is_admin": true
     },
@@ -100,8 +100,9 @@
     }
   },
   "metadata": {
-    "last_updated": "2025-10-02T12:01:08.839424",
+    "last_updated": "2025-10-02T13:36:34.225916",
     "total_users": 7,
-    "version": "1.0"
+    "version": "2.0",
+    "bot_version": "2.1"
   }
 }

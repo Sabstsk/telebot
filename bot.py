@@ -72,6 +72,12 @@ class Config:
         logger.info(f"✅ Configuration loaded successfully")
         logger.info(f"👑 Admin: @{self.ADMIN_USERNAME} (ID: {self.ADMIN_USER_ID})")
         logger.info(f"🌐 Webhook: {'Enabled' if self.WEBHOOK_URL else 'Disabled (Polling mode)'}")
+        
+        # Validate API key format
+        if self.API_KEY and len(self.API_KEY) < 5:
+            logger.warning(f"⚠️ API key seems too short: {len(self.API_KEY)} characters")
+        elif self.API_KEY:
+            logger.info(f"🔑 API key loaded: {self.API_KEY[:3]}***{self.API_KEY[-2:] if len(self.API_KEY) > 5 else '***'}")
 
 # Initialize configuration
 config = Config()
@@ -644,6 +650,12 @@ def query_api(number: str) -> Tuple[bool, str]:
                         logger.warning(f"⚠️ API returned invalid text response")
                         return True, "❌ No data found for this number"
             
+            elif resp.status_code == 401:
+                # Invalid API key
+                error_msg = "❌ Invalid API key! Please check your API_KEY in environment variables."
+                logger.error(f"🔑 API Authentication failed: {error_msg}")
+                return False, error_msg
+            
             elif resp.status_code == 429:
                 # Rate limiting
                 wait_time = config.RETRY_DELAY * (2 ** attempt)
@@ -1161,7 +1173,7 @@ Select an option below:
 
 🤖 **Bot Info:**
 • Bot Name: Mobile Number Lookup Bot
-• Admin: @{ADMIN_USERNAME}
+• Admin: @{config.ADMIN_USERNAME}
 • Version: 2.0 (Admin Edition)
 
 📈 **Usage Stats:**
@@ -1723,7 +1735,7 @@ Click any command below to use it! 👇
 
 🚀 **You can now use the bot with your new subscription!**
 
-💬 **Activated by:** Admin @{ADMIN_USERNAME}
+💬 **Activated by:** Admin @{config.ADMIN_USERNAME}
             """
             bot.send_message(target_user_id, user_notification, parse_mode='Markdown')
         except Exception as e:
@@ -1750,7 +1762,7 @@ Click any command below to use it! 👇
         # Send broadcast message to all users
         for user_id in users_to_broadcast:
             try:
-                broadcast_message = f"📢 **Admin Broadcast Message:**\n\n{broadcast_text}\n\n─────────────────\n💬 From: @{ADMIN_USERNAME}"
+                broadcast_message = f"📢 **Admin Broadcast Message:**\n\n{broadcast_text}\n\n─────────────────\n💬 From: @{config.ADMIN_USERNAME}"
                 bot.send_message(user_id, broadcast_message, parse_mode='Markdown')
                 successful_broadcasts += 1
             except Exception as e:
@@ -1830,7 +1842,11 @@ Choose an option below or send a valid mobile number! 👇
 @app.route('/', methods=['GET'])
 def index():
     """Health check endpoint and server status page"""
-    return """
+    try:
+        admin_username = getattr(config, 'ADMIN_USERNAME', 'CRAZYPANEL1')
+        bot_token = getattr(config, 'BOT_TOKEN', 'unknown')
+        
+        return """
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -1967,12 +1983,12 @@ def index():
             </div>
             
             <div class="admin-info">
-                <strong>👑 Admin:</strong> @""" + ADMIN_USERNAME + """<br>
+                <strong>👑 Admin:</strong> @""" + admin_username + """<br>
                 <strong>🌐 Status:</strong> All systems operational<br>
                 <strong>📡 API:</strong> Connected
             </div>
             
-            <a href="https://t.me/""" + BOT_TOKEN.split(':')[0] + """" class="telegram-link" target="_blank">
+            <a href="https://t.me/""" + bot_token.split(':')[0] + """" class="telegram-link" target="_blank">
                 📱 Open Bot in Telegram
             </a>
             
@@ -1983,6 +1999,21 @@ def index():
     </body>
     </html>
     """
+    except Exception as e:
+        # Return simple HTML if there's any error
+        return f"""
+        <html>
+        <head><title>Mobile Number Lookup Bot</title></head>
+        <body style="font-family: Arial; text-align: center; padding: 50px; background: #667eea; color: white;">
+            <h1>🤖 Mobile Number Lookup Bot</h1>
+            <p>✅ Server is running successfully!</p>
+            <p>🚀 Bot is ready to receive Telegram messages.</p>
+            <p>👑 Admin: @CRAZYPANEL1</p>
+            <p>🌐 Port: {config.PORT}</p>
+            <p>⏰ Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        </body>
+        </html>
+        """
 
 @app.route('/ping', methods=['GET'])
 def ping():
