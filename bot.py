@@ -11,128 +11,237 @@
 # 3) Run: python bot.py
 # 4) In Telegram send: /check 9876543210   OR just send the number.
 
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import telebot
 from telebot import types
 import requests
+from requests.exceptions import ReadTimeout, ConnectionError, RequestException
 import re
 import time
 import os
 import json
+import logging
+import threading
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
+from typing import Optional, Tuple, Dict, Any
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
 
-# === CONFIG ===
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Load from environment variable
-CHAT_ID = os.getenv("CHAT_ID")      # Load chat ID from environment variable
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "CRAZYPANEL1")  # Admin username
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7490634345"))  # Admin user ID
-API_KEY = os.getenv("API_KEY")  # Load from environment variable only
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Webhook URL for production
-PORT = int(os.getenv("PORT", 5000))  # Port for Flask app
-if not API_KEY:
-    raise ValueError("API_KEY environment variable is required. Please check your .env file.")
-API_ENDPOINT_TEMPLATE = f"https://flipcartstore.serv00.net/INFO.php?api_key={API_KEY}&mobile={{number}}"
-REQUEST_TIMEOUT = 10  # seconds
-MAX_RETRIES = 2
-RETRY_DELAY = 1.0  # seconds between retries
+# Suppress some noisy logs
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('requests').setLevel(logging.WARNING)
 
-# Subscription file management
-SUBSCRIPTION_FILE = "subscriptions.json"
+# === CONFIGURATION ===
+class Config:
+    """Configuration class for better organization"""
+    
+    def __init__(self):
+        # Bot Configuration
+        self.BOT_TOKEN = os.getenv("BOT_TOKEN")
+        self.CHAT_ID = os.getenv("CHAT_ID")
+        self.ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "CRAZYPANEL1")
+        self.ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7490634345"))
+        
+        # API Configuration
+        self.API_KEY = os.getenv("API_KEY")
+        self.API_ENDPOINT_TEMPLATE = f"https://flipcartstore.serv00.net/INFO.php?api_key={self.API_KEY}&mobile={{number}}"
+        
+        # Server Configuration
+        self.WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+        self.PORT = int(os.getenv("PORT", 5000))
+        
+        # Request Configuration
+        self.REQUEST_TIMEOUT = 15
+        self.MAX_RETRIES = 3
+        self.RETRY_DELAY = 2.0
+        
+        # File Configuration
+        self.SUBSCRIPTION_FILE = "subscriptions.json"
+        
+        # Validate required environment variables
+        self._validate_config()
+    
+    def _validate_config(self):
+        """Validate required configuration"""
+        if not self.BOT_TOKEN:
+            raise ValueError("BOT_TOKEN environment variable is required")
+        if not self.API_KEY:
+            raise ValueError("API_KEY environment variable is required")
+        
+        logger.info(f"✅ Configuration loaded successfully")
+        logger.info(f"👑 Admin: @{self.ADMIN_USERNAME} (ID: {self.ADMIN_USER_ID})")
+        logger.info(f"🌐 Webhook: {'Enabled' if self.WEBHOOK_URL else 'Disabled (Polling mode)'}")
 
-def load_subscriptions():
-    """Load subscription data from JSON file."""
-    try:
-        if os.path.exists(SUBSCRIPTION_FILE):
-            with open(SUBSCRIPTION_FILE, 'r', encoding='utf-8') as f:
+# Initialize configuration
+config = Config()
+
+# === SUBSCRIPTION MANAGEMENT ===
+class SubscriptionManager:
+    """Manages user subscriptions with thread-safe operations"""
+    
+    def __init__(self):
+        self.subscription_file = config.SUBSCRIPTION_FILE
+        self.users = {}
+        self._lock = threading.Lock()
+        self.load_subscriptions()
+        self._ensure_admin_subscription()
+    
+    def load_subscriptions(self) -> Dict[int, Dict[str, Any]]:
+        """Load subscription data from JSON file with error handling"""
+        try:
+            if not os.path.exists(self.subscription_file):
+                logger.info("📄 No subscription file found, starting fresh")
+                return {}
+            
+            with open(self.subscription_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 loaded_users = {}
                 
-                # Convert string dates back to datetime objects and convert user_id keys to integers
+                # Convert string dates back to datetime objects
                 for user_id_str, sub_data in data.get("users", {}).items():
-                    # Convert user_id from string to integer
-                    user_id = int(user_id_str)
-                    
-                    # Convert date strings back to datetime objects
-                    if sub_data.get("expires"):
-                        sub_data["expires"] = datetime.fromisoformat(sub_data["expires"])
-                    if sub_data.get("last_reset"):
-                        sub_data["last_reset"] = datetime.fromisoformat(sub_data["last_reset"]).date()
-                    if sub_data.get("created_date"):
-                        sub_data["created_date"] = datetime.fromisoformat(sub_data["created_date"])
-                    
-                    # Store with integer key
-                    loaded_users[user_id] = sub_data
+                    try:
+                        user_id = int(user_id_str)
+                        
+                        # Convert date strings back to datetime objects
+                        if sub_data.get("expires"):
+                            sub_data["expires"] = datetime.fromisoformat(sub_data["expires"])
+                        if sub_data.get("last_reset"):
+                            sub_data["last_reset"] = datetime.fromisoformat(sub_data["last_reset"]).date()
+                        if sub_data.get("created_date"):
+                            sub_data["created_date"] = datetime.fromisoformat(sub_data["created_date"])
+                        
+                        loaded_users[user_id] = sub_data
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"⚠️ Skipping invalid user data for {user_id_str}: {e}")
+                        continue
                 
-                print(f"Subscriptions loaded: {len(loaded_users)} users")
+                self.users = loaded_users
+                logger.info(f"📊 Loaded {len(loaded_users)} user subscriptions")
                 return loaded_users
-        return {}
-    except Exception as e:
-        print(f"Error loading subscriptions: {e}")
-        return {}
+                
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            logger.error(f"❌ Error loading subscriptions: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"❌ Unexpected error loading subscriptions: {e}")
+            return {}
 
-def save_subscriptions():
-    """Save subscription data to JSON file."""
-    try:
-        # Convert datetime objects to strings for JSON serialization
-        users_data = {}
-        for user_id, sub_data in user_subscriptions.items():
-            users_data[str(user_id)] = sub_data.copy()
-            if sub_data.get("expires"):
-                users_data[str(user_id)]["expires"] = sub_data["expires"].isoformat()
-            if sub_data.get("last_reset"):
-                users_data[str(user_id)]["last_reset"] = sub_data["last_reset"].isoformat()
-            if sub_data.get("created_date"):
-                users_data[str(user_id)]["created_date"] = sub_data["created_date"].isoformat()
-        
-        data = {
-            "users": users_data,
-            "metadata": {
-                "last_updated": datetime.now().isoformat(),
-                "total_users": len(users_data),
-                "version": "1.0"
+    def save_subscriptions(self) -> bool:
+        """Save subscription data to JSON file with thread safety"""
+        with self._lock:
+            try:
+                # Convert datetime objects to strings for JSON serialization
+                users_data = {}
+                for user_id, sub_data in self.users.items():
+                    users_data[str(user_id)] = sub_data.copy()
+                    
+                    # Convert datetime objects to ISO format strings
+                    if sub_data.get("expires"):
+                        users_data[str(user_id)]["expires"] = sub_data["expires"].isoformat()
+                    if sub_data.get("last_reset"):
+                        users_data[str(user_id)]["last_reset"] = sub_data["last_reset"].isoformat()
+                    if sub_data.get("created_date"):
+                        users_data[str(user_id)]["created_date"] = sub_data["created_date"].isoformat()
+                
+                data = {
+                    "users": users_data,
+                    "metadata": {
+                        "last_updated": datetime.now().isoformat(),
+                        "total_users": len(users_data),
+                        "version": "2.0",
+                        "bot_version": "2.1"
+                    }
+                }
+                
+                # Create backup before saving
+                if os.path.exists(self.subscription_file):
+                    backup_file = f"{self.subscription_file}.backup"
+                    os.rename(self.subscription_file, backup_file)
+                
+                with open(self.subscription_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                
+                logger.info(f"💾 Saved {len(users_data)} user subscriptions")
+                return True
+                
+            except Exception as e:
+                logger.error(f"❌ Error saving subscriptions: {e}")
+                return False
+
+    def add_subscription_user(self, user_id: int, username: str, first_name: str, 
+                            plan: str, payment_amount: int = 0) -> Dict[str, Any]:
+        """Add or update user subscription with validation"""
+        with self._lock:
+            # Check if user is admin
+            is_admin = (user_id == config.ADMIN_USER_ID) or \
+                      (username and username.upper() == config.ADMIN_USERNAME.upper())
+            
+            user_data = {
+                "user_id": user_id,
+                "username": username or "N/A",
+                "first_name": first_name or "N/A",
+                "plan": plan,
+                "payment_amount": payment_amount,
+                "created_date": datetime.now(),
+                "expires": None,
+                "searches_used": 0,
+                "last_reset": datetime.now().date(),
+                "total_searches": 0,
+                "status": "active",
+                "is_admin": is_admin
             }
-        }
-        
-        with open(SUBSCRIPTION_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        
-        print(f"Subscriptions saved: {len(users_data)} users")
-    except Exception as e:
-        print(f"Error saving subscriptions: {e}")
+            
+            # Set expiry date based on plan
+            if plan == "single":
+                user_data["expires"] = datetime.now() + timedelta(days=1)
+            elif plan == "lifetime":
+                user_data["expires"] = datetime.now() + timedelta(days=36500)  # 100 years
+            
+            self.users[user_id] = user_data
+            self.save_subscriptions()
+            
+            logger.info(f"👤 Added/Updated subscription for user {user_id} ({username}): {plan} plan")
+            return user_data
+    
+    def _ensure_admin_subscription(self):
+        """Ensure admin has proper subscription"""
+        admin_id = config.ADMIN_USER_ID
+        if admin_id not in self.users:
+            logger.info(f"👑 Creating admin subscription for ID: {admin_id}")
+            self.add_subscription_user(
+                admin_id, config.ADMIN_USERNAME, "Admin", "lifetime", 0
+            )
+        else:
+            # Ensure existing admin has proper privileges
+            admin_sub = self.users[admin_id]
+            if admin_sub.get('plan') != 'lifetime' or not admin_sub.get('is_admin', False):
+                logger.info(f"🔄 Updating admin subscription")
+                admin_sub.update({
+                    'plan': 'lifetime',
+                    'is_admin': True,
+                    'expires': datetime.now() + timedelta(days=36500),
+                    'payment_amount': 0
+                })
+                self.save_subscriptions()
 
-def add_subscription_user(user_id, username, first_name, plan, payment_amount=0):
-    """Add or update user subscription with full details."""
-    # Check if user is admin (by user ID or username)
-    is_admin = (user_id == ADMIN_USER_ID) or (username and username.upper() == ADMIN_USERNAME.upper())
-    
-    user_data = {
-        "user_id": user_id,
-        "username": username or "N/A",
-        "first_name": first_name or "N/A",
-        "plan": plan,
-        "payment_amount": payment_amount,
-        "created_date": datetime.now(),
-        "expires": None,
-        "searches_used": 0,
-        "last_reset": datetime.now().date(),
-        "total_searches": 0,
-        "status": "active",
-        "is_admin": is_admin
-    }
-    
-    # Set expiry date based on plan
-    if plan == "single":
-        user_data["expires"] = datetime.now() + timedelta(days=1)
-    elif plan == "lifetime":
-        user_data["expires"] = datetime.now() + timedelta(days=361000)  # 100 years
-    
-    user_subscriptions[user_id] = user_data
-    save_subscriptions()
-    return user_data
+# Initialize subscription manager
+subscription_manager = SubscriptionManager()
 
 # Storage for search history and stats
 search_history = {}  # user_id: [list of searches]
@@ -140,80 +249,63 @@ bot_stats = {"total_searches": 0, "start_time": datetime.now()}
 broadcast_mode = {}  # user_id: True when admin is in broadcast mode
 admin_subscription_mode = {}  # user_id: True when admin is adding subscription
 
-# Subscription system
-user_subscriptions = load_subscriptions()  # Load existing subscriptions from file
-
-# Ensure admin has lifetime subscription
-if ADMIN_USER_ID not in user_subscriptions:
-    print(f"👑 Creating lifetime subscription for admin (ID: {ADMIN_USER_ID})")
-    user_subscriptions[ADMIN_USER_ID] = {
-        "user_id": ADMIN_USER_ID,
-        "username": ADMIN_USERNAME,
-        "first_name": "Admin",
-        "plan": "lifetime",
-        "payment_amount": 0,  # Free for admin
-        "created_date": datetime.now(),
-        "expires": datetime.now() + timedelta(days=36500),  # 100 years
-        "searches_used": 0,
-        "last_reset": datetime.now().date(),
-        "total_searches": 0,
-        "status": "active",
-        "is_admin": True
-    }
-    save_subscriptions()
-else:
-    # Ensure existing admin has proper admin status
-    admin_sub = user_subscriptions[ADMIN_USER_ID]
-    if admin_sub.get('plan') != 'lifetime' or not admin_sub.get('is_admin', False):
-        print(f"🔄 Updating admin subscription to lifetime")
-        admin_sub['plan'] = 'lifetime'
-        admin_sub['is_admin'] = True
-        admin_sub['expires'] = datetime.now() + timedelta(days=36500)
-        admin_sub['payment_amount'] = 0
-        save_subscriptions()
-
-# Debug: Print loaded subscriptions at startup
-print(f"🔄 Bot starting with {len(user_subscriptions)} existing subscriptions:")
-for user_id, sub_data in user_subscriptions.items():
-    admin_status = " (ADMIN)" if sub_data.get('is_admin', False) else ""
-    print(f"  👤 User {user_id}: {sub_data['plan']} plan (expires: {sub_data.get('expires', 'Never')}){admin_status}")
-
+# Subscription plans configuration
 subscription_plans = {
     "free": {"searches_per_day": 0, "price": 0, "duration_days": 0},
-    "single": {"searches_per_day": 1, "price": 100, "duration_days": 1},      # ₹100 for 1 search
-    "lifetime": {"searches_per_day": 999, "price": 8000, "duration_days": 36500}  # ₹8000 lifetime (100 years)
+    "single": {"searches_per_day": 1, "price": 100, "duration_days": 1},
+    "lifetime": {"searches_per_day": 999, "price": 8000, "duration_days": 36500}
 }
-# =============
 
-# Validate that required environment variables are loaded
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable is required. Please check your .env file.")
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# Initialize bot with optimized settings
+bot = telebot.TeleBot(config.BOT_TOKEN, parse_mode='Markdown', threaded=True)
+
+# Configure bot to handle connection errors gracefully
+telebot.apihelper.RETRY_ON_ERROR = True
+telebot.apihelper.RETRY_TIMEOUT = 3
+telebot.apihelper.MAX_RETRIES = 3
+telebot.apihelper.READ_TIMEOUT = 30
+telebot.apihelper.CONNECT_TIMEOUT = 15
+
+# Initialize Flask app
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.urandom(24)
 
 # simple number validator: allow optional +, digits, 10-15 digits total
 NUMBER_RE = re.compile(r'^\+?\d{10,15}$')
 
-def normalize_number(text: str) -> str | None:
-    """Extract and normalize digits from input. Returns None if invalid."""
+def normalize_number(text: str) -> Optional[str]:
+    """Extract and normalize digits from input with improved validation"""
+    if not text or not isinstance(text, str):
+        return None
+    
     text = text.strip()
-    # remove spaces, hyphens, parentheses
-    cleaned = re.sub(r'[\s\-\(\)]', '', text)
-    # if it contains letters -> invalid
+    if not text:
+        return None
+    
+    # Remove common separators and formatting
+    cleaned = re.sub(r'[\s\-\(\)\.]', '', text)
+    
+    # Check for letters (invalid)
     if re.search(r'[A-Za-z]', cleaned):
         return None
-    # keep leading + if present
+    
+    # Handle international format (+91, +1, etc.)
     if cleaned.startswith('+'):
         candidate = cleaned
     else:
-        candidate = re.sub(r'^\D+', '', cleaned)  
+        # Remove any leading non-digits
+        candidate = re.sub(r'^\D+', '', cleaned)
+    
+    # Validate with regex
     if NUMBER_RE.match(candidate):
         return candidate
-    # maybe the user passed number with country code prefix like 0 at start; try just digits
+    
+    # Fallback: extract just digits and validate length
     digits = re.sub(r'\D', '', cleaned)
-    if len(digits) >= 10 and len(digits) <= 15:
+    if 10 <= len(digits) <= 15:
         return digits
+    
     return None
 
 def format_user_data(data_list):
@@ -263,87 +355,74 @@ def create_main_keyboard():
     )
     return keyboard
 
-def get_user_subscription(user_id, username=None, first_name=None):
-    """Get user's current subscription status."""
-    if user_id not in user_subscriptions:
-        # Check if user is admin (by user ID or username)
-        is_admin = (user_id == ADMIN_USER_ID) or (username and username.upper() == ADMIN_USERNAME.upper())
+def get_user_subscription(user_id: int, username: Optional[str] = None, first_name: Optional[str] = None) -> Dict[str, Any]:
+    """Get user's current subscription status with improved handling"""
+    # Check if user exists in subscription manager
+    if user_id not in subscription_manager.users:
+        # Check if user is admin
+        is_admin = is_admin_by_user_id(user_id, username)
         
         if is_admin:
-            # Admin gets lifetime access by default
-            user_subscriptions[user_id] = {
-                "user_id": user_id,
-                "username": username or "N/A",
-                "first_name": first_name or "N/A",
-                "plan": "lifetime",
-                "payment_amount": 0,  # Free for admin
-                "created_date": datetime.now(),
-                "expires": datetime.now() + timedelta(days=361000),  # 100 years
-                "searches_used": 0,
-                "last_reset": datetime.now().date(),
-                "total_searches": 0,
-                "status": "active",
-                "is_admin": True
-            }
+            # Admin gets lifetime access
+            return subscription_manager.add_subscription_user(
+                user_id, username or config.ADMIN_USERNAME, first_name or "Admin", "lifetime", 0
+            )
         else:
-            # New user gets free plan with full details
-            user_subscriptions[user_id] = {
-                "user_id": user_id,
-                "username": username or "N/A",
-                "first_name": first_name or "N/A",
-                "plan": "free",
-                "payment_amount": 0,
-                "created_date": datetime.now(),
-                "expires": None,
-                "searches_used": 0,
-                "last_reset": datetime.now().date(),
-                "total_searches": 0,
-                "status": "active",
-                "is_admin": False
-            }
-        save_subscriptions()
+            # New user gets free plan
+            return subscription_manager.add_subscription_user(
+                user_id, username, first_name, "free", 0
+            )
     
-    subscription = user_subscriptions[user_id]
+    subscription = subscription_manager.users[user_id]
     
     # Update user details if provided
+    updated = False
     if username and subscription.get("username") != username:
         subscription["username"] = username
-        save_subscriptions()
+        updated = True
     if first_name and subscription.get("first_name") != first_name:
         subscription["first_name"] = first_name
-        save_subscriptions()
+        updated = True
     
     # Check if subscription expired
     if subscription["expires"] and datetime.now() > subscription["expires"]:
         subscription["plan"] = "free"
         subscription["expires"] = None
         subscription["status"] = "expired"
-        save_subscriptions()
+        updated = True
     
     # Reset daily search count
     if subscription["last_reset"] != datetime.now().date():
         subscription["searches_used"] = 0
         subscription["last_reset"] = datetime.now().date()
-        save_subscriptions()
+        updated = True
+    
+    if updated:
+        subscription_manager.save_subscriptions()
     
     return subscription
 
-def can_user_search(user_id):
-    """Check if user can perform a search based on their subscription."""
-    # Check if user is admin by checking their subscription
+def can_user_search(user_id: int) -> Tuple[bool, str]:
+    """Check if user can perform a search based on their subscription"""
     subscription = get_user_subscription(user_id)
-    if subscription.get("is_admin", False):  # Admin has unlimited access
+    
+    # Admin has unlimited access
+    if subscription.get("is_admin", False):
         return True, ""
     
     plan = subscription_plans[subscription["plan"]]
     
     if subscription["searches_used"] >= plan["searches_per_day"]:
-        return False, f"❌ Daily limit reached! You've used {subscription['searches_used']}/{plan['searches_per_day']} searches.\n\n🔍 **Single Search:** ₹100 for 1 search\n👑 **Lifetime:** ₹8000 for unlimited searches forever!"
+        return False, (
+            f"❌ Daily limit reached! You've used {subscription['searches_used']}/{plan['searches_per_day']} searches.\n\n"
+            f"🔍 **Single Search:** ₹100 for 1 search\n"
+            f"👑 **Lifetime:** ₹8000 for unlimited searches forever!"
+        )
     
     return True, ""
 
-def use_search_credit(user_id):
-    """Deduct one search credit from user."""
+def use_search_credit(user_id: int) -> None:
+    """Deduct one search credit from user"""
     subscription = get_user_subscription(user_id)
     
     # Don't deduct credits from admin
@@ -351,7 +430,9 @@ def use_search_credit(user_id):
         subscription["searches_used"] += 1
     
     subscription["total_searches"] = subscription.get("total_searches", 0) + 1
-    save_subscriptions()
+    subscription_manager.save_subscriptions()
+    
+    logger.info(f"📊 User {user_id} used search credit: {subscription['searches_used']}/{subscription_plans[subscription['plan']]['searches_per_day']}")
 
 def create_subscription_keyboard():
     """Create subscription plans keyboard."""
@@ -364,15 +445,30 @@ def create_subscription_keyboard():
     )
     return keyboard
 
-def is_admin(message):
-    """Check if user is admin."""
+def is_admin(message) -> bool:
+    """Check if user is admin with improved validation"""
+    if not message or not message.from_user:
+        return False
+    
     user_id = message.from_user.id
     username = message.from_user.username
-    return (user_id == ADMIN_USER_ID) or (username and username.upper() == ADMIN_USERNAME.upper())
+    
+    return is_admin_by_user_id(user_id, username)
 
-def is_admin_by_user_id(user_id, username):
-    """Check if user is admin by user ID and username."""
-    return (user_id == ADMIN_USER_ID) or (username and username.upper() == ADMIN_USERNAME.upper())
+def is_admin_by_user_id(user_id: int, username: Optional[str]) -> bool:
+    """Check if user is admin by user ID and username"""
+    if user_id == config.ADMIN_USER_ID:
+        return True
+    
+    if username and username.upper() == config.ADMIN_USERNAME.upper():
+        return True
+    
+    # Check subscription manager for admin status
+    user_sub = subscription_manager.users.get(user_id)
+    if user_sub and user_sub.get('is_admin', False):
+        return True
+    
+    return False
 
 def create_admin_keyboard():
     """Create admin inline keyboard with management options."""
@@ -430,33 +526,85 @@ def add_to_history(user_id, number, result_found=True):
     # Update global stats
     bot_stats["total_searches"] += 1
 
-def query_api(number: str) -> tuple[bool, str]:
-    """Call the remote API. Returns (success, result_text)."""
-    url = API_ENDPOINT_TEMPLATE.format(number=number)
+def query_api(number: str) -> Tuple[bool, str]:
+    """Call the remote API with improved error handling and retries"""
+    url = config.API_ENDPOINT_TEMPLATE.format(number=number)
     last_exc = None
-    for attempt in range(1, MAX_RETRIES + 1):
+    
+    for attempt in range(1, config.MAX_RETRIES + 1):
         try:
-            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-            # try to return response text (API may return json or plain text)
+            logger.info(f"🔍 API Request attempt {attempt}/{config.MAX_RETRIES} for number: {number[:3]}***")
+            
+            resp = requests.get(
+                url, 
+                timeout=config.REQUEST_TIMEOUT,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Connection': 'keep-alive'
+                }
+            )
+            
             if resp.status_code == 200:
-                # Try to parse and format JSON response
                 try:
+                    # Try to parse as JSON first
                     json_data = resp.json()
                     if isinstance(json_data, list) and len(json_data) > 0:
-                        # Format the data with emojis
                         formatted_response = format_user_data(json_data)
+                        logger.info(f"✅ API Success: Found {len(json_data)} record(s)")
                         return True, formatted_response
+                    elif isinstance(json_data, dict) and json_data.get('status') == 'success':
+                        # Handle different API response formats
+                        data = json_data.get('data', [])
+                        if data:
+                            formatted_response = format_user_data(data if isinstance(data, list) else [data])
+                            logger.info(f"✅ API Success: Found data")
+                            return True, formatted_response
+                    
+                    logger.warning(f"⚠️ API returned empty or invalid data")
+                    return True, "❌ No data found for this number"
+                    
+                except (json.JSONDecodeError, ValueError) as e:
+                    # If not JSON, check if it's a valid text response
+                    text_response = resp.text.strip()
+                    if text_response and len(text_response) > 10:
+                        logger.info(f"✅ API Success: Text response received")
+                        return True, text_response
                     else:
+                        logger.warning(f"⚠️ API returned invalid text response")
                         return True, "❌ No data found for this number"
-                except (json.JSONDecodeError, ValueError):
-                    # If not JSON, return raw text
-                    return True, resp.text
+            
+            elif resp.status_code == 429:
+                # Rate limiting
+                wait_time = config.RETRY_DELAY * (2 ** attempt)
+                logger.warning(f"⚠️ Rate limited, waiting {wait_time}s before retry")
+                time.sleep(wait_time)
+                continue
+            
             else:
-                return False, f"API returned HTTP {resp.status_code}: {resp.text}"
+                error_msg = f"API returned HTTP {resp.status_code}"
+                if attempt == config.MAX_RETRIES:
+                    return False, error_msg
+                logger.warning(f"{error_msg}, retrying...")
+                
+        except (ReadTimeout, ConnectionError) as e:
+            last_exc = e
+            logger.warning(f"🌐 Network error on attempt {attempt}: {type(e).__name__}")
+            if attempt < config.MAX_RETRIES:
+                time.sleep(config.RETRY_DELAY * attempt)
+        except RequestException as e:
+            last_exc = e
+            logger.error(f"❌ Request error on attempt {attempt}: {e}")
+            if attempt < config.MAX_RETRIES:
+                time.sleep(config.RETRY_DELAY)
         except Exception as e:
             last_exc = e
-            time.sleep(RETRY_DELAY)
-    return False, f"Request failed after {MAX_RETRIES} attempts. Last error: {last_exc}"
+            logger.error(f"❌ Unexpected error on attempt {attempt}: {e}")
+            break
+    
+    error_msg = f"Request failed after {config.MAX_RETRIES} attempts. Last error: {type(last_exc).__name__}: {str(last_exc)[:100]}"
+    logger.error(error_msg)
+    return False, error_msg
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
@@ -1430,12 +1578,12 @@ Click any command below to use it! 👇
         target_first_name = "N/A"
         
         # Check if user exists in subscriptions
-        if target_user_id in user_subscriptions:
-            target_username = user_subscriptions[target_user_id].get("username", "N/A")
-            target_first_name = user_subscriptions[target_user_id].get("first_name", "N/A")
+        if target_user_id in subscription_manager.users:
+            target_username = subscription_manager.users[target_user_id].get("username", "N/A")
+            target_first_name = subscription_manager.users[target_user_id].get("first_name", "N/A")
         
         # Add subscription
-        user_data = add_subscription_user(target_user_id, target_username, target_first_name, plan, price)
+        user_data = subscription_manager.add_subscription_user(target_user_id, target_username, target_first_name, plan, price)
         
         # Remove admin from subscription mode
         del admin_subscription_mode[message.from_user.id]
@@ -1802,51 +1950,136 @@ def set_webhook():
         }), 400
 
 def setup_webhook():
-    """Setup webhook on startup"""
-    if WEBHOOK_URL:
+    """Setup webhook on startup with improved error handling"""
+    if config.WEBHOOK_URL:
         try:
-            webhook_url = f"{WEBHOOK_URL}/webhook"
+            webhook_url = f"{config.WEBHOOK_URL}/webhook"
             bot.remove_webhook()
+            time.sleep(1)  # Give time for webhook removal
             bot.set_webhook(url=webhook_url)
-            print(f"✅ Webhook set to: {webhook_url}")
+            logger.info(f"✅ Webhook set to: {webhook_url}")
         except Exception as e:
-            print(f"❌ Failed to set webhook: {e}")
+            logger.error(f"❌ Failed to set webhook: {e}")
+            raise
     else:
-        print("⚠️ WEBHOOK_URL not set, running in polling mode for development")
+        logger.info("⚠️ WEBHOOK_URL not set, running in polling mode")
 
-def start_bot_polling():
-    """Start bot in polling mode (runs in a separate thread)"""
-    print("🔄 Starting bot polling in background...")
+class BotManager:
+    """Manages bot polling with improved error handling and recovery"""
+    
+    def __init__(self):
+        self.retry_delay = 5
+        self.max_retry_delay = 60
+        self.is_running = False
+        self.consecutive_errors = 0
+        self.max_consecutive_errors = 10
+    
+    def start_polling(self):
+        """Start bot polling with enhanced error recovery"""
+        logger.info("🔄 Starting bot polling...")
+        self.is_running = True
+        
+        while self.is_running:
+            try:
+                # Clear webhook before polling
+                try:
+                    bot.remove_webhook()
+                    time.sleep(2)
+                except Exception as e:
+                    logger.warning(f"Could not remove webhook: {e}")
+                
+                logger.info("🤖 Bot polling started successfully")
+                self.consecutive_errors = 0  # Reset error counter
+                
+                bot.infinity_polling(
+                    timeout=30,
+                    long_polling_timeout=30,
+                    allowed_updates=['message', 'callback_query']
+                )
+                
+            except (ReadTimeout, ConnectionError) as e:
+                self._handle_network_error(e)
+            except Exception as e:
+                self._handle_general_error(e)
+            
+            if self.is_running:
+                logger.info(f"🔄 Reconnecting in {self.retry_delay} seconds...")
+                time.sleep(self.retry_delay)
+                self._adjust_retry_delay()
+    
+    def _handle_network_error(self, error):
+        """Handle network-related errors"""
+        self.consecutive_errors += 1
+        logger.warning(f"🌐 Network error #{self.consecutive_errors}: {type(error).__name__}")
+        
+        if self.consecutive_errors >= self.max_consecutive_errors:
+            logger.error(f"❌ Too many consecutive errors ({self.consecutive_errors}). Stopping bot.")
+            self.is_running = False
+            return
+        
+        # Exponential backoff for network errors
+        self.retry_delay = min(self.retry_delay * 1.5, self.max_retry_delay)
+    
+    def _handle_general_error(self, error):
+        """Handle general errors"""
+        self.consecutive_errors += 1
+        logger.error(f"❌ Bot error #{self.consecutive_errors}: {type(error).__name__}: {str(error)[:150]}")
+        
+        if self.consecutive_errors >= self.max_consecutive_errors:
+            logger.error(f"❌ Critical: Too many errors. Bot stopping.")
+            self.is_running = False
+            return
+    
+    def _adjust_retry_delay(self):
+        """Adjust retry delay based on error count"""
+        if self.consecutive_errors == 0:
+            self.retry_delay = 5  # Reset to minimum
+        else:
+            self.retry_delay = min(self.retry_delay * 2, self.max_retry_delay)
+    
+    def stop(self):
+        """Stop the bot polling"""
+        self.is_running = False
+        logger.info("🛑 Bot polling stopped")
+
+# Initialize bot manager
+bot_manager = BotManager()
+
+def main():
+    """Main application entry point"""
     try:
-        bot.infinity_polling(none_stop=True, interval=0, timeout=20)
+        logger.info("🤖 Mobile Number Lookup Bot v2.1 Starting...")
+        logger.info(f"👑 Admin: @{config.ADMIN_USERNAME} (ID: {config.ADMIN_USER_ID})")
+        logger.info(f"📊 Loaded {len(subscription_manager.users)} user subscriptions")
+        logger.info("📱 Bot is ready! Send /start to begin.")
+        
+        # Always run Flask app to bind to port (required for deployment platforms)
+        if config.WEBHOOK_URL:
+            logger.info("🌐 Running in webhook mode for production...")
+            setup_webhook()
+            logger.info(f"🚀 Flask app starting on port {config.PORT}")
+            app.run(host='0.0.0.0', port=config.PORT, debug=False)
+        else:
+            logger.info("🔄 Running in hybrid mode (Flask + Polling)...")
+            logger.info(f"🌐 Flask server will run on port {config.PORT}")
+            logger.info("🤖 Bot will use polling for Telegram updates")
+            
+            # Start bot polling in a separate thread
+            polling_thread = threading.Thread(target=bot_manager.start_polling, daemon=True)
+            polling_thread.start()
+            
+            # Run Flask app (this keeps the main thread alive and binds to port)
+            logger.info(f"🚀 Flask app starting on port {config.PORT}")
+            app.run(host='0.0.0.0', port=config.PORT, debug=False, use_reloader=False)
+            
+    except KeyboardInterrupt:
+        logger.info("🛑 Received shutdown signal")
+        bot_manager.stop()
     except Exception as e:
-        print(f"Bot polling stopped with error: {e}")
-        # Restart the bot
-        import time
-        time.sleep(5)
-        start_bot_polling()
+        logger.error(f"❌ Fatal error: {e}")
+        raise
+    finally:
+        logger.info("👋 Bot shutdown complete")
 
 if __name__ == "__main__":
-    print("🤖 Mobile Number Lookup Bot Starting...")
-    print(f"👑 Admin: @{ADMIN_USERNAME}")
-    print("📱 Bot is ready! Send /start to begin.")
-    
-    # Always run Flask app to bind to port (required for deployment platforms)
-    if WEBHOOK_URL:
-        print("🌐 Running in webhook mode for production...")
-        setup_webhook()
-        print(f"🚀 Flask app starting on port {PORT}")
-        app.run(host='0.0.0.0', port=PORT, debug=False)
-    else:
-        print("🔄 Running in hybrid mode (Flask + Polling)...")
-        print(f"🌐 Flask server will run on port {PORT}")
-        print("🤖 Bot will use polling for Telegram updates")
-        
-        # Start bot polling in a separate thread
-        import threading
-        polling_thread = threading.Thread(target=start_bot_polling, daemon=True)
-        polling_thread.start()
-        
-        # Run Flask app (this keeps the main thread alive and binds to port)
-        print(f"🚀 Flask app starting on port {PORT}")
-        app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
+    main()
