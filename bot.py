@@ -1,6 +1,6 @@
 # telegram_number_bot.py
 # Simple Telegram bot that calls:
-# https://ishanxstudio.space/kunal/number.php?number=<number>&key=MK103020070811
+# https://flipcartstore.serv00.net/INFO.php?api_key=chxInfo&mobile=<mobile>
 #
 # Requirements:
 #   pip install pyTelegramBotAPI requests
@@ -35,7 +35,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Webhook URL for production
 PORT = int(os.getenv("PORT", 5000))  # Port for Flask app
 if not API_KEY:
     raise ValueError("API_KEY environment variable is required. Please check your .env file.")
-API_ENDPOINT_TEMPLATE = "https://ishanxstudio.space/kunal/number.php?number={number}&key=" + API_KEY
+API_ENDPOINT_TEMPLATE = f"https://flipcartstore.serv00.net/INFO.php?api_key={API_KEY}&mobile={{number}}"
 REQUEST_TIMEOUT = 10  # seconds
 MAX_RETRIES = 2
 RETRY_DELAY = 1.0  # seconds between retries
@@ -562,7 +562,7 @@ def bot_info(message):
 🤖 **Name:** Mobile Number Lookup Bot
 ⚡ **Version:** 2.0
 🔧 **Developer:** @CRAZYPANEL1  
-🌐 **API:** Ishan Studio API
+🌐 **API:** Flipcart Store API
 
 🎯 **Features:**
 • Mobile number lookup
