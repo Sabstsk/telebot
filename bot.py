@@ -2081,48 +2081,109 @@ def test_webhook():
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     """Set webhook URL (for manual setup if needed)"""
-    if config.WEBHOOK_URL and config.WEBHOOK_URL.strip():
-        try:
-            webhook_url = f"{config.WEBHOOK_URL.rstrip('/')}/webhook"
-            
-            # Remove existing webhook first
-            bot.remove_webhook()
+    # Use the actual Render URL if WEBHOOK_URL is not set
+    webhook_base_url = config.WEBHOOK_URL or "https://telebot-1-2tl0.onrender.com"
+    
+    try:
+        webhook_url = f"{webhook_base_url.rstrip('/')}/webhook"
+        logger.info(f"🔧 Manual webhook setup to: {webhook_url}")
+        
+        # Remove existing webhook first
+        bot.remove_webhook(drop_pending_updates=True)
+        time.sleep(2)
+        logger.info("🗑️ Removed existing webhook")
+        
+        # Set new webhook
+        result = bot.set_webhook(
+            url=webhook_url,
+            max_connections=10,
+            drop_pending_updates=True
+        )
+        
+        if result:
+            logger.info("✅ Webhook set successfully!")
+            # Get webhook info for verification
             time.sleep(1)
+            webhook_info = bot.get_webhook_info()
             
-            # Set new webhook
-            result = bot.set_webhook(url=webhook_url)
-            
-            if result:
-                # Get webhook info for verification
-                webhook_info = bot.get_webhook_info()
-                return jsonify({
-                    "status": "success",
-                    "message": f"Webhook set to {webhook_url}",
-                    "webhook_info": {
-                        "url": webhook_info.url,
-                        "has_custom_certificate": webhook_info.has_custom_certificate,
-                        "pending_update_count": webhook_info.pending_update_count,
-                        "last_error_message": webhook_info.last_error_message,
-                        "last_error_date": webhook_info.last_error_date
-                    }
-                })
-            else:
-                return jsonify({
-                    "status": "error",
-                    "message": "Failed to set webhook"
-                }), 500
-                
-        except Exception as e:
-            logger.error(f"Manual webhook setup failed: {e}")
+            return jsonify({
+                "status": "success",
+                "message": f"Webhook set to {webhook_url}",
+                "webhook_info": {
+                    "url": webhook_info.url,
+                    "has_custom_certificate": webhook_info.has_custom_certificate,
+                    "pending_update_count": webhook_info.pending_update_count,
+                    "last_error_message": webhook_info.last_error_message,
+                    "last_error_date": str(webhook_info.last_error_date) if webhook_info.last_error_date else None,
+                    "max_connections": webhook_info.max_connections
+                }
+            })
+        else:
             return jsonify({
                 "status": "error",
-                "message": str(e)
+                "message": "Failed to set webhook"
             }), 500
-    else:
+            
+    except Exception as e:
+        logger.error(f"Manual webhook setup failed: {e}")
         return jsonify({
             "status": "error",
-            "message": "WEBHOOK_URL environment variable not set or empty"
-        }), 400
+            "message": str(e),
+            "webhook_url_attempted": webhook_base_url
+        }), 500
+
+@app.route('/fix_webhook', methods=['GET'])
+def fix_webhook():
+    """Quick fix webhook endpoint specifically for telebot-1-2tl0.onrender.com"""
+    try:
+        webhook_url = "https://telebot-1-2tl0.onrender.com/webhook"
+        logger.info(f"🔧 Quick fix webhook to: {webhook_url}")
+        
+        # Test bot connection first
+        bot_info = bot.get_me()
+        logger.info(f"🤖 Bot connected: @{bot_info.username}")
+        
+        # Remove existing webhook
+        bot.remove_webhook(drop_pending_updates=True)
+        time.sleep(2)
+        
+        # Set new webhook
+        result = bot.set_webhook(
+            url=webhook_url,
+            max_connections=10,
+            drop_pending_updates=True
+        )
+        
+        if result:
+            time.sleep(1)
+            webhook_info = bot.get_webhook_info()
+            
+            return jsonify({
+                "status": "success",
+                "message": "Webhook fixed successfully!",
+                "bot_info": {
+                    "username": bot_info.username,
+                    "first_name": bot_info.first_name
+                },
+                "webhook_info": {
+                    "url": webhook_info.url,
+                    "pending_updates": webhook_info.pending_update_count,
+                    "last_error": webhook_info.last_error_message,
+                    "max_connections": webhook_info.max_connections
+                }
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Failed to set webhook"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Quick webhook fix failed: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 def setup_webhook():
     """Setup webhook on startup with improved error handling"""
@@ -2231,10 +2292,16 @@ def main():
         # Force production mode if on Render
         if os.environ.get('RENDER') and not config.WEBHOOK_URL:
             # Auto-generate webhook URL for Render
-            render_service = os.environ.get('RENDER_SERVICE_NAME', 'telegram-bot')
+            render_service = os.environ.get('RENDER_SERVICE_NAME', 'telebot-1-2tl0')
             config.WEBHOOK_URL = f"https://{render_service}.onrender.com"
             is_production = True
             print(f"🔧 Auto-detected Render, setting webhook: {config.WEBHOOK_URL}")
+        
+        # Override with actual URL if we detect we're on the specific Render instance
+        if 'telebot-1-2tl0.onrender.com' in str(os.environ.get('RENDER_EXTERNAL_URL', '')):
+            config.WEBHOOK_URL = "https://telebot-1-2tl0.onrender.com"
+            is_production = True
+            print(f"🎯 Detected specific Render URL: {config.WEBHOOK_URL}")
         
         if is_production:
             print(f"🔗 Webhook URL: {config.WEBHOOK_URL}")
@@ -2315,7 +2382,9 @@ def setup_webhook_for_render():
         logger.info("🔄 Waiting for Flask to be ready...")
         time.sleep(5)  # Give more time for Render
         
-        logger.info(f"🔗 Setting up Render webhook: {config.WEBHOOK_URL}")
+        # Use the actual Render URL
+        webhook_base_url = config.WEBHOOK_URL or "https://telebot-1-2tl0.onrender.com"
+        logger.info(f"🔗 Setting up Render webhook: {webhook_base_url}")
         
         # Test bot connection first
         try:
@@ -2334,7 +2403,7 @@ def setup_webhook_for_render():
             logger.warning(f"⚠️ Webhook removal warning: {e}")
         
         # Set new webhook with proper URL
-        webhook_url = f"{config.WEBHOOK_URL.rstrip('/')}/webhook"
+        webhook_url = f"{webhook_base_url.rstrip('/')}/webhook"
         logger.info(f"🔗 Setting webhook to: {webhook_url}")
         
         result = bot.set_webhook(
