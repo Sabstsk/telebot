@@ -54,7 +54,7 @@ class Config:
         
         # Server Configuration
         self.WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-        self.PORT = int(os.getenv("PORT", 5000))
+        self.PORT = int(os.getenv("PORT", 10000))
         
         # Request Configuration
         self.REQUEST_TIMEOUT = 15
@@ -2585,7 +2585,6 @@ def main():
             use_reloader=False, 
             threaded=True
         )
-            
     except KeyboardInterrupt:
         print("🛑 Received shutdown signal")
         if 'bot_manager' in globals():
