@@ -1008,11 +1008,21 @@ def handle_check(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback_query(call):
-    """Handle inline keyboard button clicks."""
+    """Handle inline keyboard button clicks with error handling."""
     user_id = call.from_user.id
     
+    def safe_answer_callback(call_id, text=None):
+        """Safely answer callback query with error handling"""
+        try:
+            bot.answer_callback_query(call_id, text=text)
+        except Exception as e:
+            if "query is too old" in str(e) or "query ID is invalid" in str(e):
+                logger.warning(f"⚠️ Ignoring old callback query: {call_id}")
+            else:
+                logger.error(f"❌ Callback query error: {e}")
+    
     if call.data == "check_number":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         check_text = """
 🔍 **Ready to Check Mobile Number!** 🔍
 
@@ -1039,7 +1049,7 @@ def handle_callback_query(call):
         bot.send_message(call.message.chat.id, check_text, parse_mode='Markdown')
     
     elif call.data == "statistics":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         uptime = datetime.now() - bot_stats["start_time"]
         stats_text = f"""
 📊 **Bot Statistics** 📊
@@ -1055,7 +1065,7 @@ def handle_callback_query(call):
         bot.send_message(call.message.chat.id, stats_text, parse_mode='Markdown')
     
     elif call.data == "history":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         user_history = search_history.get(user_id, [])
         if not user_history:
             bot.send_message(call.message.chat.id, "📋 No search history found. Start by searching a mobile number!")
@@ -1068,7 +1078,7 @@ def handle_callback_query(call):
     
     
     elif call.data == "help":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         help_text = """
 ❓ **Complete Help Guide** ❓
 
@@ -1133,7 +1143,7 @@ def handle_callback_query(call):
     
     
     elif call.data == "admin_panel":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if not is_admin_by_user_id(call.from_user.id, call.from_user.username):
             bot.send_message(call.message.chat.id, "❌ Access Denied! You are not authorized.")
             return
@@ -1154,7 +1164,7 @@ Select an option below:
         bot.send_message(call.message.chat.id, admin_text, reply_markup=create_admin_keyboard(), parse_mode='Markdown')
     
     elif call.data == "admin_users":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if not is_admin_by_user_id(call.from_user.id, call.from_user.username):
             bot.send_message(call.message.chat.id, "❌ Access Denied!")
             return
@@ -1175,7 +1185,7 @@ Select an option below:
         bot.send_message(call.message.chat.id, users_text, parse_mode='Markdown')
     
     elif call.data == "admin_stats":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if not is_admin_by_user_id(call.from_user.id, call.from_user.username):
             bot.send_message(call.message.chat.id, "❌ Access Denied!")
             return
@@ -1209,7 +1219,7 @@ Select an option below:
         bot.send_message(call.message.chat.id, stats_text, parse_mode='Markdown')
     
     elif call.data == "admin_history":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if not is_admin_by_user_id(call.from_user.id, call.from_user.username):
             bot.send_message(call.message.chat.id, "❌ Access Denied!")
             return
@@ -1228,7 +1238,7 @@ Select an option below:
         bot.send_message(call.message.chat.id, history_text, parse_mode='Markdown')
     
     elif call.data == "admin_subscriptions":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if not is_admin_by_user_id(call.from_user.id, call.from_user.username):
             bot.send_message(call.message.chat.id, "❌ Access Denied!")
             return
@@ -1269,7 +1279,7 @@ Select an option below:
         bot.send_message(call.message.chat.id, subs_text, parse_mode='Markdown')
     
     elif call.data == "admin_reset":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if not is_admin_by_user_id(call.from_user.id, call.from_user.username):
             bot.send_message(call.message.chat.id, "❌ Access Denied!")
             return
@@ -1282,7 +1292,7 @@ Select an option below:
         bot.send_message(call.message.chat.id, "🔄 **Bot statistics have been reset!**\n\nAll search history and statistics have been cleared.", parse_mode='Markdown')
     
     elif call.data == "admin_add_sub":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if not is_admin_by_user_id(call.from_user.id, call.from_user.username):
             bot.send_message(call.message.chat.id, "❌ Access Denied!")
             return
@@ -1305,7 +1315,7 @@ Select plan to add:
         bot.send_message(call.message.chat.id, add_sub_text, reply_markup=create_admin_sub_keyboard(), parse_mode='Markdown')
     
     elif call.data.startswith("admin_sub_"):
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if not is_admin_by_user_id(call.from_user.id, call.from_user.username):
             bot.send_message(call.message.chat.id, "❌ Access Denied!")
             return
@@ -1336,13 +1346,13 @@ Select plan to add:
         bot.send_message(call.message.chat.id, prompt_text, parse_mode='Markdown')
     
     elif call.data == "admin_cancel_sub":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if call.from_user.id in admin_subscription_mode:
             del admin_subscription_mode[call.from_user.id]
         bot.send_message(call.message.chat.id, "❌ **Subscription addition cancelled.**", reply_markup=create_admin_keyboard(), parse_mode='Markdown')
     
     elif call.data == "admin_broadcast":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if not is_admin_by_user_id(call.from_user.id, call.from_user.username):
             bot.send_message(call.message.chat.id, "❌ Access Denied!")
             return
@@ -1356,7 +1366,7 @@ Select plan to add:
         bot.send_message(call.message.chat.id, "📢 **Broadcast Mode Activated!**\n\n✍️ **Send your message now** and it will be broadcasted to all bot users.\n\n📊 **Users to receive:** " + str(len(search_history)) + " users", reply_markup=cancel_keyboard, parse_mode='Markdown')
     
     elif call.data == "admin_control":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if not is_admin_by_user_id(call.from_user.id, call.from_user.username):
             bot.send_message(call.message.chat.id, "❌ Access Denied!")
             return
@@ -1381,13 +1391,13 @@ Select plan to add:
         bot.send_message(call.message.chat.id, control_text, parse_mode='Markdown')
     
     elif call.data == "cancel_broadcast":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         if call.from_user.id in broadcast_mode:
             del broadcast_mode[call.from_user.id]
         bot.send_message(call.message.chat.id, "❌ **Broadcast cancelled!**\n\nReturning to admin panel...", reply_markup=create_admin_keyboard(), parse_mode='Markdown')
     
     elif call.data == "subscription":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         subscription = get_user_subscription(user_id)
         plan_info = subscription_plans[subscription["plan"]]
         
@@ -1424,7 +1434,7 @@ Choose a plan below to upgrade:
         bot.send_message(call.message.chat.id, subscription_text, reply_markup=create_subscription_keyboard(), parse_mode='Markdown')
     
     elif call.data == "my_subscription":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         subscription = get_user_subscription(user_id)
         plan_info = subscription_plans[subscription["plan"]]
         
@@ -1458,7 +1468,7 @@ Choose a plan below to upgrade:
         bot.send_message(call.message.chat.id, status_text, parse_mode='Markdown')
     
     elif call.data == "plan_single":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         maintenance_text = """
 🔧 **Payment System Under Maintenance** 🔧
 
@@ -1484,7 +1494,7 @@ Choose a plan below to upgrade:
         bot.send_message(call.message.chat.id, maintenance_text, parse_mode='Markdown')
     
     elif call.data == "plan_lifetime":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         maintenance_text = """
 🔧 **Payment System Under Maintenance** 🔧
 
@@ -1516,16 +1526,16 @@ Choose a plan below to upgrade:
         bot.send_message(call.message.chat.id, maintenance_text, parse_mode='Markdown')
     
     elif call.data == "back_main":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         bot.send_message(call.message.chat.id, "🔙 Returning to main menu...", reply_markup=create_main_keyboard())
     
     # Command suggestion handlers
     elif call.data == "cmd_start":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         send_welcome(call.message)
     
     elif call.data == "cmd_check":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         check_text = """
 🔍 **Ready to Check Mobile Number!** 🔍
 
@@ -1551,7 +1561,7 @@ Choose a plan below to upgrade:
         bot.send_message(call.message.chat.id, check_text, parse_mode='Markdown')
     
     elif call.data == "cmd_help":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         # Trigger the help section from the existing help handler
         help_text = """
 ❓ **Complete Help Guide** ❓
@@ -1613,23 +1623,23 @@ Choose a plan below to upgrade:
         bot.send_message(call.message.chat.id, help_text, parse_mode='Markdown')
     
     elif call.data == "cmd_admin":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         admin_panel(call.message)
     
     elif call.data == "cmd_mystats":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         my_stats(call.message)
     
     elif call.data == "cmd_pricing":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         show_pricing(call.message)
     
     elif call.data == "cmd_contact":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         contact_info(call.message)
     
     elif call.data == "cmd_cancel":
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call.id)
         cancel_admin_action(call.message)
 
 def create_command_suggestions_keyboard():
@@ -2137,8 +2147,11 @@ def test_bot():
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     """Set webhook URL (for manual setup if needed)"""
-    # Use the actual Render URL if WEBHOOK_URL is not set
-    webhook_base_url = config.WEBHOOK_URL or "https://telebot-1-2tl0.onrender.com"
+    # Use the actual Render URL from request or config
+    if request.host_url and 'onrender.com' in request.host_url:
+        webhook_base_url = request.host_url.rstrip('/')
+    else:
+        webhook_base_url = config.WEBHOOK_URL or request.host_url.rstrip('/')
     
     try:
         webhook_url = f"{webhook_base_url.rstrip('/')}/webhook"
@@ -2156,7 +2169,10 @@ def set_webhook():
         )
         
         if result:
+            # Update config with working URL
+            config.WEBHOOK_URL = webhook_base_url
             logger.info("✅ Webhook set successfully!")
+            
             # Get webhook info for verification
             time.sleep(1)
             webhook_info = bot.get_webhook_info()
@@ -2164,6 +2180,7 @@ def set_webhook():
             return jsonify({
                 "status": "success",
                 "message": f"Webhook set to {webhook_url}",
+                "base_url_detected": webhook_base_url,
                 "webhook_info": {
                     "url": webhook_info.url,
                     "has_custom_certificate": webhook_info.has_custom_certificate,
@@ -2260,26 +2277,27 @@ def fix_webhook():
         logger.exception("Full error details:")
         return jsonify({
             "status": "error",
-            "message": str(e),
-            "webhook_url": "https://telebot-1-2tl0.onrender.com/webhook"
+            "message": str(e)
         }), 500
 
-@app.route('/force_webhook', methods=['GET'])
-def force_webhook():
-    """Force webhook setup with minimal parameters"""
+@app.route('/clear_updates', methods=['GET'])
+def clear_updates():
+    """Clear pending updates"""
     try:
-        webhook_url = "https://telebot-1-2tl0.onrender.com/webhook"
+        # Get pending updates and clear them
+        updates = bot.get_updates(timeout=1)
+        cleared_count = len(updates)
         
-        # Simple webhook setup
-        result = bot.set_webhook(webhook_url)
+        # Mark updates as processed by getting them with offset
+        if updates:
+            last_update_id = updates[-1].update_id
+            bot.get_updates(offset=last_update_id + 1, timeout=1)
         
         return jsonify({
-            "status": "success" if result else "failed",
-            "webhook_url": webhook_url,
-            "result": result,
-            "message": "Webhook force set completed"
+            "status": "success",
+            "message": f"Cleared {cleared_count} pending updates",
+            "cleared_count": cleared_count
         })
-        
     except Exception as e:
         return jsonify({
             "status": "error",
@@ -2424,18 +2442,24 @@ def main():
         
         # Force production mode if on Render
         if os.environ.get('RENDER') and not config.WEBHOOK_URL:
-            # Auto-generate webhook URL for Render using RENDER_EXTERNAL_URL
+            # Try multiple methods to get the Render URL
             render_external_url = os.environ.get('RENDER_EXTERNAL_URL')
+            render_service_name = os.environ.get('RENDER_SERVICE_NAME')
+            
             if render_external_url:
-                config.WEBHOOK_URL = render_external_url
+                config.WEBHOOK_URL = render_external_url.rstrip('/')
                 is_production = True
-                print(f"🔧 Auto-detected Render URL: {config.WEBHOOK_URL}")
+                print(f"🔧 Auto-detected Render URL from RENDER_EXTERNAL_URL: {config.WEBHOOK_URL}")
+            elif render_service_name:
+                config.WEBHOOK_URL = f"https://{render_service_name}.onrender.com"
+                is_production = True
+                print(f"🔧 Auto-generated Render URL from service name: {config.WEBHOOK_URL}")
             else:
-                # Fallback to service name if RENDER_EXTERNAL_URL is not available
-                render_service = os.environ.get('RENDER_SERVICE_NAME', 'telegram-bot')
-                config.WEBHOOK_URL = f"https://{render_service}.onrender.com"
+                # Last resort - use a generic pattern (user will need to update)
+                config.WEBHOOK_URL = "https://telegram-bot.onrender.com"
                 is_production = True
-                print(f"🔧 Auto-generated Render URL: {config.WEBHOOK_URL}")
+                print(f"🔧 Using fallback Render URL: {config.WEBHOOK_URL}")
+                print("⚠️ Please set WEBHOOK_URL environment variable with your actual Render URL")
         
         if is_production:
             print(f"🔗 Webhook URL: {config.WEBHOOK_URL}")
@@ -2514,9 +2538,27 @@ def main():
     finally:
         print("👋 Bot shutdown complete")
 
+def clear_pending_updates():
+    """Clear any pending updates to prevent old callback query errors"""
+    try:
+        logger.info("🧹 Clearing pending updates...")
+        updates = bot.get_updates(timeout=1)
+        if updates:
+            # Mark all updates as processed
+            last_update_id = updates[-1].update_id
+            bot.get_updates(offset=last_update_id + 1, timeout=1)
+            logger.info(f"✅ Cleared {len(updates)} pending updates")
+        else:
+            logger.info("✅ No pending updates to clear")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not clear pending updates: {e}")
+
 def setup_webhook_for_render():
     """Setup webhook specifically for Render deployment"""
     try:
+        # Clear pending updates first to prevent old callback query errors
+        clear_pending_updates()
+        
         # Wait for Flask to be fully ready
         logger.info("🔄 Waiting for Flask to be ready...")
         time.sleep(5)  # Give more time for Render
@@ -2583,6 +2625,9 @@ def setup_local_polling():
     """Setup polling for local development"""
     try:
         logger.info("📱 Setting up local polling mode...")
+        
+        # Clear pending updates first
+        clear_pending_updates()
         
         # Clear any existing webhook
         try:

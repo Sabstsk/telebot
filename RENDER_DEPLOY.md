@@ -22,6 +22,11 @@
 - **Issue**: Missing global variable declaration
 - **Fix**: Added proper global variable initialization
 
+### 6. ✅ Callback Query Error Handling
+- **Issue**: "query is too old" errors causing bot crashes
+- **Fix**: Added safe callback query handler with error handling
+- **Fix**: Auto-clear pending updates on startup
+
 ## Environment Variables Required on Render
 
 ### Required:
@@ -52,22 +57,32 @@ After deployment, test these URLs:
 
 ## Troubleshooting
 
-### Bot Not Responding
-1. Check logs in Render dashboard
-2. Verify `BOT_TOKEN` is correctly set
-3. Visit `/health` endpoint to check status
-4. Visit `/set_webhook` to manually set webhook
+### Bot Not Responding (webhook_inactive)
+If you see `"bot_status":"webhook_inactive"` and `"url":""` in health check:
+
+**Quick Fix:**
+1. Visit: `https://your-app.onrender.com/set_webhook`
+2. This will auto-detect your Render URL and set the webhook
+3. Check: `https://your-app.onrender.com/health` - should show webhook active
+
+**If you have pending updates:**
+1. Visit: `https://your-app.onrender.com/clear_updates`
+2. Then visit: `https://your-app.onrender.com/set_webhook`
 
 ### API Errors
 1. Verify `API_KEY` is correctly set
 2. Check `/debug` endpoint for API status
 3. Test API manually via `/test_api?number=1234567890`
 
-## Manual Webhook Setup (if needed)
+### Environment Variables
+1. Verify `BOT_TOKEN` is correctly set
+2. Check logs in Render dashboard for validation errors
 
-If webhook isn't auto-configured:
-1. Visit: `https://your-app.onrender.com/set_webhook`
-2. Or use: `https://your-app.onrender.com/fix_webhook`
+## Manual Webhook Setup Options
+
+1. **Auto-detect URL**: `https://your-app.onrender.com/set_webhook`
+2. **Force webhook**: `https://your-app.onrender.com/force_webhook`
+3. **Clear pending updates**: `https://your-app.onrender.com/clear_updates`
 
 ## Success Indicators
 
