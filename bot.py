@@ -341,6 +341,45 @@ app.config['SECRET_KEY'] = os.urandom(24)
 # Set template folder to current directory
 app.template_folder = os.path.dirname(os.path.abspath(__file__))
 
+# --- Public URL detection helper for reverse proxies (Render) ---
+def get_public_base_url() -> Optional[str]:
+    """Detect the public HTTPS base URL behind Render's proxy.
+    Prefers X-Forwarded headers and forces https schema for Telegram webhook.
+    """
+    try:
+        # Prefer forwarded headers set by the edge proxy
+        forwarded_proto = request.headers.get('X-Forwarded-Proto') or 'https'
+        forwarded_host = request.headers.get('X-Forwarded-Host')
+        forwarded_port = request.headers.get('X-Forwarded-Port')
+        host = forwarded_host or request.headers.get('Host')
+
+        # Fallback to configured WEBHOOK_URL if headers are missing
+        if not host and config.WEBHOOK_URL:
+            try:
+                # Extract host from configured URL
+                base = config.WEBHOOK_URL.rstrip('/')
+                return base
+            except Exception:
+                pass
+
+        if not host:
+            return None
+
+        # Always force https for Telegram webhook
+        scheme = 'https'
+
+        # Avoid appending default ports
+        if forwarded_port and forwarded_port not in ('80', '443') and ':' not in host:
+            public_host = f"{host}:{forwarded_port}"
+        else:
+            public_host = host
+
+        public_base = f"{scheme}://{public_host}"
+        return public_base.rstrip('/')
+    except Exception as e:
+        logger.warning(f"Public URL detection failed: {e}")
+        return (config.WEBHOOK_URL or '').rstrip('/') if config.WEBHOOK_URL else None
+
 # simple number validator: allow optional +, digits, 10-15 digits total
 NUMBER_RE = re.compile(r'^\+?\d{10,15}$')
 
@@ -2147,11 +2186,8 @@ def test_bot():
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     """Set webhook URL (for manual setup if needed)"""
-    # Use the actual Render URL from request or config
-    if request.host_url and 'onrender.com' in request.host_url:
-        webhook_base_url = request.host_url.rstrip('/')
-    else:
-        webhook_base_url = config.WEBHOOK_URL or request.host_url.rstrip('/')
+    # Use robust public URL detection
+    webhook_base_url = get_public_base_url() or (config.WEBHOOK_URL or request.host_url.rstrip('/'))
     
     try:
         webhook_url = f"{webhook_base_url.rstrip('/')}/webhook"
@@ -2209,8 +2245,7 @@ def auto_setup():
     """Auto-setup webhook using the actual Render URL"""
     try:
         # Get the actual URL from the request
-        if request.host_url and 'onrender.com' in request.host_url:
-            webhook_base_url = request.host_url.rstrip('/')
+        webhook_base_url = get_public_base_url() or request.host_url.rstrip('/')
             logger.info(f"🔧 Auto-detected Render URL: {webhook_base_url}")
             
             # Update config
@@ -2264,7 +2299,7 @@ def setup_now():
     """Immediate webhook setup for deployment"""
     try:
         # Get current URL
-        webhook_base_url = request.host_url.rstrip('/')
+        webhook_base_url = get_public_base_url() or request.host_url.rstrip('/')
         webhook_url = f"{webhook_base_url}/webhook"
         
         logger.info(f"🚀 IMMEDIATE webhook setup to: {webhook_url}")
@@ -2348,7 +2383,7 @@ def force_webhook():
     """Force webhook setup with current URL"""
     try:
         # Get current URL
-        webhook_base_url = request.host_url.rstrip('/')
+        webhook_base_url = get_public_base_url() or request.host_url.rstrip('/')
         webhook_url = f"{webhook_base_url}/webhook"
         
         logger.info(f"🔧 Force webhook setup to: {webhook_url}")
