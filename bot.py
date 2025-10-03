@@ -2259,6 +2259,90 @@ def auto_setup():
             "message": str(e)
         }), 500
 
+@app.route('/force_webhook', methods=['GET'])
+def force_webhook():
+    """Force webhook setup with current URL"""
+    try:
+        # Get current URL
+        webhook_base_url = request.host_url.rstrip('/')
+        webhook_url = f"{webhook_base_url}/webhook"
+        
+        logger.info(f"🔧 Force webhook setup to: {webhook_url}")
+        
+        # Test bot connection first
+        try:
+            bot_info = bot.get_me()
+            logger.info(f"🤖 Bot connected: @{bot_info.username}")
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": f"Bot connection failed: {e}"
+            }), 500
+        
+        # Clear any existing webhook
+        try:
+            bot.remove_webhook()
+            logger.info("🗑️ Cleared existing webhook")
+            time.sleep(3)
+        except Exception as e:
+            logger.warning(f"⚠️ Webhook removal warning: {e}")
+        
+        # Set new webhook
+        try:
+            result = bot.set_webhook(
+                url=webhook_url,
+                max_connections=10,
+                allowed_updates=['message', 'callback_query']
+            )
+            logger.info(f"🔗 Webhook set result: {result}")
+        except Exception as e:
+            logger.error(f"❌ Webhook set failed: {e}")
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to set webhook: {e}"
+            }), 500
+        
+        if result:
+            # Update config
+            config.WEBHOOK_URL = webhook_base_url
+            
+            # Verify webhook
+            time.sleep(2)
+            webhook_info = bot.get_webhook_info()
+            
+            return jsonify({
+                "status": "success",
+                "message": "Webhook set successfully!",
+                "bot_info": {
+                    "username": bot_info.username,
+                    "first_name": bot_info.first_name,
+                    "id": bot_info.id
+                },
+                "webhook_info": {
+                    "url": webhook_info.url,
+                    "pending_updates": webhook_info.pending_update_count,
+                    "last_error": webhook_info.last_error_message,
+                    "max_connections": webhook_info.max_connections
+                },
+                "next_steps": [
+                    "1. Test bot by sending /start to @your_bot_username",
+                    "2. Check /health endpoint for status",
+                    "3. Check /debug for detailed information"
+                ]
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Webhook setup failed - check bot token and URL"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Force webhook failed: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 @app.route('/fix_webhook', methods=['GET'])
 def fix_webhook():
     """Quick fix webhook endpoint specifically for telebot-1-2tl0.onrender.com"""
@@ -2555,12 +2639,13 @@ def main():
                 # Setup bot mode based on environment
                 if is_production:
                     logger.info("🌐 Setting up production webhook mode...")
-                    # Only set up webhook if URL is available
+                    # Always try to set up webhook in production
                     if config.WEBHOOK_URL:
                         setup_webhook_for_render()
                     else:
                         logger.info("⚠️ WEBHOOK_URL not set - webhook will be configured via /auto_setup")
                         logger.info("🤖 Bot is ready but webhook needs to be configured")
+                        logger.info("🔧 Visit /force_webhook to manually set webhook")
                 else:
                     logger.info("🖥️ Setting up local polling mode...")
                     setup_local_polling()
