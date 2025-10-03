@@ -2204,6 +2204,61 @@ def set_webhook():
             "webhook_url_attempted": webhook_base_url
         }), 500
 
+@app.route('/auto_setup', methods=['GET'])
+def auto_setup():
+    """Auto-setup webhook using the actual Render URL"""
+    try:
+        # Get the actual URL from the request
+        if request.host_url and 'onrender.com' in request.host_url:
+            webhook_base_url = request.host_url.rstrip('/')
+            logger.info(f"🔧 Auto-detected Render URL: {webhook_base_url}")
+            
+            # Update config
+            config.WEBHOOK_URL = webhook_base_url
+            
+            # Set up webhook
+            webhook_url = f"{webhook_base_url}/webhook"
+            logger.info(f"🔗 Setting webhook to: {webhook_url}")
+            
+            # Remove existing webhook
+            bot.remove_webhook()
+            time.sleep(2)
+            
+            # Set new webhook
+            result = bot.set_webhook(url=webhook_url, max_connections=10)
+            
+            if result:
+                time.sleep(1)
+                webhook_info = bot.get_webhook_info()
+                
+                return jsonify({
+                    "status": "success",
+                    "message": "Auto-setup completed successfully!",
+                    "webhook_url": webhook_url,
+                    "webhook_info": {
+                        "url": webhook_info.url,
+                        "pending_updates": webhook_info.pending_update_count,
+                        "last_error": webhook_info.last_error_message
+                    }
+                })
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": "Failed to set webhook"
+                }), 500
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Not running on Render or invalid URL"
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Auto-setup failed: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 @app.route('/fix_webhook', methods=['GET'])
 def fix_webhook():
     """Quick fix webhook endpoint specifically for telebot-1-2tl0.onrender.com"""
@@ -2455,15 +2510,20 @@ def main():
                 is_production = True
                 print(f"🔧 Auto-generated Render URL from service name: {config.WEBHOOK_URL}")
             else:
-                # Last resort - use a generic pattern (user will need to update)
-                config.WEBHOOK_URL = "https://telegram-bot.onrender.com"
+                # For Render, we need to get the URL from the request or use a dynamic approach
+                print("🔧 Render detected but no WEBHOOK_URL set")
+                print("⚠️ Please set WEBHOOK_URL environment variable in Render dashboard")
+                print("   Example: https://your-app-name.onrender.com")
+                # Don't set a fallback URL, let the user configure it properly
                 is_production = True
-                print(f"🔧 Using fallback Render URL: {config.WEBHOOK_URL}")
-                print("⚠️ Please set WEBHOOK_URL environment variable with your actual Render URL")
         
         if is_production:
-            print(f"🔗 Webhook URL: {config.WEBHOOK_URL}")
-            print(f"📱 Test interface: {config.WEBHOOK_URL}/")
+            if config.WEBHOOK_URL:
+                print(f"🔗 Webhook URL: {config.WEBHOOK_URL}")
+                print(f"📱 Test interface: {config.WEBHOOK_URL}/")
+            else:
+                print("⚠️ WEBHOOK_URL not set - will auto-detect from requests")
+                print("📱 Visit /auto_setup after deployment to configure webhook")
         else:
             print(f"📱 Test interface: http://localhost:{config.PORT}/")
         
@@ -2495,8 +2555,12 @@ def main():
                 # Setup bot mode based on environment
                 if is_production:
                     logger.info("🌐 Setting up production webhook mode...")
-                    # Don't start polling in webhook mode, just set up webhook
-                    setup_webhook_for_render()
+                    # Only set up webhook if URL is available
+                    if config.WEBHOOK_URL:
+                        setup_webhook_for_render()
+                    else:
+                        logger.info("⚠️ WEBHOOK_URL not set - webhook will be configured via /auto_setup")
+                        logger.info("🤖 Bot is ready but webhook needs to be configured")
                 else:
                     logger.info("🖥️ Setting up local polling mode...")
                     setup_local_polling()
@@ -2567,6 +2631,8 @@ def setup_webhook_for_render():
         webhook_base_url = config.WEBHOOK_URL
         if not webhook_base_url:
             logger.error("❌ No webhook URL configured for Render deployment")
+            logger.error("Please set WEBHOOK_URL environment variable in Render dashboard")
+            logger.error("Example: https://your-app-name.onrender.com")
             return
         logger.info(f"🔗 Setting up Render webhook: {webhook_base_url}")
         
