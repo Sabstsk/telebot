@@ -2259,6 +2259,90 @@ def auto_setup():
             "message": str(e)
         }), 500
 
+@app.route('/setup_now', methods=['GET'])
+def setup_now():
+    """Immediate webhook setup for deployment"""
+    try:
+        # Get current URL
+        webhook_base_url = request.host_url.rstrip('/')
+        webhook_url = f"{webhook_base_url}/webhook"
+        
+        logger.info(f"🚀 IMMEDIATE webhook setup to: {webhook_url}")
+        
+        # Test bot connection
+        try:
+            bot_info = bot.get_me()
+            logger.info(f"🤖 Bot connected: @{bot_info.username}")
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": f"Bot connection failed: {e}"
+            }), 500
+        
+        # Clear existing webhook
+        try:
+            bot.remove_webhook()
+            logger.info("🗑️ Cleared existing webhook")
+            time.sleep(2)
+        except Exception as e:
+            logger.warning(f"⚠️ Webhook removal warning: {e}")
+        
+        # Set new webhook
+        try:
+            result = bot.set_webhook(
+                url=webhook_url,
+                max_connections=10,
+                allowed_updates=['message', 'callback_query']
+            )
+            logger.info(f"🔗 Webhook set result: {result}")
+        except Exception as e:
+            logger.error(f"❌ Webhook set failed: {e}")
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to set webhook: {e}"
+            }), 500
+        
+        if result:
+            # Update config
+            config.WEBHOOK_URL = webhook_base_url
+            
+            # Verify webhook
+            time.sleep(2)
+            webhook_info = bot.get_webhook_info()
+            
+            return jsonify({
+                "status": "success",
+                "message": "Webhook setup completed!",
+                "bot_info": {
+                    "username": bot_info.username,
+                    "first_name": bot_info.first_name,
+                    "id": bot_info.id
+                },
+                "webhook_info": {
+                    "url": webhook_info.url,
+                    "pending_updates": webhook_info.pending_update_count,
+                    "last_error": webhook_info.last_error_message,
+                    "max_connections": webhook_info.max_connections
+                },
+                "test_instructions": [
+                    "1. Send /start to your bot on Telegram",
+                    "2. Try sending a mobile number",
+                    "3. Check /health for status"
+                ]
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Webhook setup failed"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Setup now failed: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 @app.route('/force_webhook', methods=['GET'])
 def force_webhook():
     """Force webhook setup with current URL"""
@@ -2658,6 +2742,11 @@ def main():
         init_thread = threading.Thread(target=initialize_components, daemon=True)
         init_thread.start()
         
+        # Give some time for webhook setup in production
+        if is_production and config.WEBHOOK_URL:
+            logger.info("⏳ Waiting for webhook setup to complete...")
+            time.sleep(3)  # Give time for webhook setup
+        
         # Start Flask app IMMEDIATELY to bind to port
         print(f"🌐 Flask server starting on 0.0.0.0:{config.PORT}")
         print(f"🔍 Health: {config.WEBHOOK_URL or f'http://localhost:{config.PORT}'}/health")
@@ -2709,7 +2798,7 @@ def setup_webhook_for_render():
         
         # Wait for Flask to be fully ready
         logger.info("🔄 Waiting for Flask to be ready...")
-        time.sleep(5)  # Give more time for Render
+        time.sleep(3)  # Reduced wait time
         
         # Use the actual Render URL
         webhook_base_url = config.WEBHOOK_URL
