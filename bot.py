@@ -2244,48 +2244,49 @@ def set_webhook():
 def auto_setup():
     """Auto-setup webhook using the actual Render URL"""
     try:
-        # Get the actual URL from the request
-        webhook_base_url = get_public_base_url() or request.host_url.rstrip('/')
-            logger.info(f"🔧 Auto-detected Render URL: {webhook_base_url}")
-            
-            # Update config
-            config.WEBHOOK_URL = webhook_base_url
-            
-            # Set up webhook
-            webhook_url = f"{webhook_base_url}/webhook"
-            logger.info(f"🔗 Setting webhook to: {webhook_url}")
-            
-            # Remove existing webhook
-            bot.remove_webhook()
-            time.sleep(2)
-            
-            # Set new webhook
-            result = bot.set_webhook(url=webhook_url, max_connections=10)
-            
-            if result:
-                time.sleep(1)
-                webhook_info = bot.get_webhook_info()
-                
-                return jsonify({
-                    "status": "success",
-                    "message": "Auto-setup completed successfully!",
-                    "webhook_url": webhook_url,
-                    "webhook_info": {
-                        "url": webhook_info.url,
-                        "pending_updates": webhook_info.pending_update_count,
-                        "last_error": webhook_info.last_error_message
-                    }
-                })
-            else:
-                return jsonify({
-                    "status": "error",
-                    "message": "Failed to set webhook"
-                }), 500
+        # Detect public base URL behind proxy
+        webhook_base_url = get_public_base_url() or (config.WEBHOOK_URL or request.host_url.rstrip('/'))
+        if not webhook_base_url:
+            return jsonify({
+                "status": "error",
+                "message": "Could not determine public base URL"
+            }), 400
+
+        logger.info(f"🔧 Auto-detected Render URL: {webhook_base_url}")
+
+        # Update config for downstream logic
+        config.WEBHOOK_URL = webhook_base_url
+
+        # Build webhook URL and set it
+        webhook_url = f"{webhook_base_url}/webhook"
+        logger.info(f"🔗 Setting webhook to: {webhook_url}")
+
+        # Remove existing webhook
+        bot.remove_webhook()
+        time.sleep(2)
+
+        # Set new webhook
+        result = bot.set_webhook(url=webhook_url, max_connections=10)
+
+        if result:
+            time.sleep(1)
+            webhook_info = bot.get_webhook_info()
+
+            return jsonify({
+                "status": "success",
+                "message": "Auto-setup completed successfully!",
+                "webhook_url": webhook_url,
+                "webhook_info": {
+                    "url": webhook_info.url,
+                    "pending_updates": webhook_info.pending_update_count,
+                    "last_error": webhook_info.last_error_message
+                }
+            })
         else:
             return jsonify({
                 "status": "error",
-                "message": "Not running on Render or invalid URL"
-            }), 400
+                "message": "Failed to set webhook"
+            }), 500
             
     except Exception as e:
         logger.error(f"Auto-setup failed: {e}")
