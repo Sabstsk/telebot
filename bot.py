@@ -15,13 +15,15 @@ from flask import Flask, request, jsonify, render_template_string, send_from_dir
 from typing import Optional, Tuple, Dict, Any
 
 # Configure logging with better performance
+# Only use file logging in local development, use console logging on Render
+handlers = [logging.StreamHandler()]
+if not os.environ.get('RENDER'):
+    handlers.append(logging.FileHandler('bot.log', encoding='utf-8'))
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('bot.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    handlers=handlers
 )
 
 # Optimize logging for better performance
@@ -72,9 +74,14 @@ class Config:
         if not self.API_KEY:
             raise ValueError("API_KEY environment variable is required")
         
+        # Validate bot token format
+        if not self.BOT_TOKEN.count(':') == 1 or len(self.BOT_TOKEN) < 40:
+            raise ValueError("BOT_TOKEN format appears invalid")
+        
         logger.info(f"✅ Configuration loaded successfully")
         logger.info(f"👑 Admin: @{self.ADMIN_USERNAME} (ID: {self.ADMIN_USER_ID})")
         logger.info(f"🌐 Webhook: {'Enabled' if self.WEBHOOK_URL else 'Disabled (Polling mode)'}")
+        logger.info(f"🔑 Bot token: {self.BOT_TOKEN[:10]}***")
         
         # Validate API key format
         if self.API_KEY and len(self.API_KEY) < 5:
@@ -301,6 +308,7 @@ class SubscriptionManager:
 
 # Initialize subscription manager (will be done in background for faster startup)
 subscription_manager = None
+bot_manager = None
 
 # Storage for search history and stats
 search_history = {}  # user_id: [list of searches]
@@ -2416,17 +2424,18 @@ def main():
         
         # Force production mode if on Render
         if os.environ.get('RENDER') and not config.WEBHOOK_URL:
-            # Auto-generate webhook URL for Render
-            render_service = os.environ.get('RENDER_SERVICE_NAME', 'telebot-1-2tl0')
-            config.WEBHOOK_URL = f"https://{render_service}.onrender.com"
-            is_production = True
-            print(f"🔧 Auto-detected Render, setting webhook: {config.WEBHOOK_URL}")
-        
-        # Override with actual URL if we detect we're on the specific Render instance
-        if 'telebot-1-2tl0.onrender.com' in str(os.environ.get('RENDER_EXTERNAL_URL', '')):
-            config.WEBHOOK_URL = "https://telebot-1-2tl0.onrender.com"
-            is_production = True
-            print(f"🎯 Detected specific Render URL: {config.WEBHOOK_URL}")
+            # Auto-generate webhook URL for Render using RENDER_EXTERNAL_URL
+            render_external_url = os.environ.get('RENDER_EXTERNAL_URL')
+            if render_external_url:
+                config.WEBHOOK_URL = render_external_url
+                is_production = True
+                print(f"🔧 Auto-detected Render URL: {config.WEBHOOK_URL}")
+            else:
+                # Fallback to service name if RENDER_EXTERNAL_URL is not available
+                render_service = os.environ.get('RENDER_SERVICE_NAME', 'telegram-bot')
+                config.WEBHOOK_URL = f"https://{render_service}.onrender.com"
+                is_production = True
+                print(f"🔧 Auto-generated Render URL: {config.WEBHOOK_URL}")
         
         if is_production:
             print(f"🔗 Webhook URL: {config.WEBHOOK_URL}")
@@ -2513,7 +2522,10 @@ def setup_webhook_for_render():
         time.sleep(5)  # Give more time for Render
         
         # Use the actual Render URL
-        webhook_base_url = config.WEBHOOK_URL or "https://telebot-1-2tl0.onrender.com"
+        webhook_base_url = config.WEBHOOK_URL
+        if not webhook_base_url:
+            logger.error("❌ No webhook URL configured for Render deployment")
+            return
         logger.info(f"🔗 Setting up Render webhook: {webhook_base_url}")
         
         # Test bot connection first
